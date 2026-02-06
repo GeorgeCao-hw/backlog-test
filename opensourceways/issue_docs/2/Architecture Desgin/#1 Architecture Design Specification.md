@@ -86,7 +86,7 @@
 |----------|-------------------|---------|---------------------|
 | **信息泄露** | git token配置需要加密   | 高       | codeArts配置加密存储      |
 
-![img_2.png](img_2.png)
+![img_2.png](img_2.png)![开源漏洞门禁扫描备案过程.drawio.svg](..%2F..%2F..%2F%E5%85%AC%E5%85%B1%E6%96%87%E6%A1%A3%2F%E5%BC%80%E6%BA%90%E6%BC%8F%E6%B4%9E%E9%97%A8%E7%A6%81%E6%89%AB%E6%8F%8F%E5%A4%87%E6%A1%88%E8%BF%87%E7%A8%8B.drawio.svg)
 
 ### 3.1.2 安全设计实现 (Security Mechanisms)
 
