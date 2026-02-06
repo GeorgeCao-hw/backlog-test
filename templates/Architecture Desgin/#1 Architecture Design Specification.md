@@ -17,7 +17,7 @@
 ### 2.1 架构图
 
 > 此处建议插入架构拓扑系统组件图或时序图,描述组件间的交互关系。建议使用[https:
-> //app.diagrams.net/?src=about](https://app.diagrams.net/?src=about)，开源免费支持多语言多种软件设计图，可保存原件到github下用于归档复用。
+> //app.diagrams.net/?src=about](https://app.diagrams.net/?src=about)，开源免费支持多语言多种软件设计图，可保存原件(建议svg，可预览，可导入复用)到github下用于归档复用。
 > **建议归档服务模块设计图，后续需要可增量复用（导入设计文件到工具中即可复用增量设计）。**
 > **不涉及需要说明原因**
 
