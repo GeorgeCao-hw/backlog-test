@@ -108,3 +108,4 @@ backlog/
 ## 可用命令
 
 - `/ai-design <Issue URL 或 issueId>`：DevOps 全生命周期文档编写（需求分析 → 架构设计 → 测试策略 → 变更计划），自动判断当前阶段
+- `/code-review <PR 编号或 PR URL>`：对指定 PR 进行结构化代码检视，按高/中/低分级输出检视报告
