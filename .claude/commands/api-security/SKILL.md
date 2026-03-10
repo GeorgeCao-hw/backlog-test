@@ -26,6 +26,28 @@ OUTPUTS:
 - Security middleware examples
 - OWASP API Top 10 compliance guidance
 
+## Team Standards Reference
+
+All API security implementations should follow team standards:
+
+- **API安全最佳实践** (`context/team/API安全最佳实践.md`)
+  - API设计安全原则
+  - 认证与授权机制
+  - 速率限制与防护
+  - 数据验证与加密
+  - 常见API漏洞防护
+
+- **安全编码规范** (`context/team/安全编码规范.md`)
+  - 输入验证与防注入
+  - 认证与授权实现
+  - 数据保护方法
+  - 错误处理与日志
+
+- **安全设计与开发最佳实践** (`context/team/安全设计与开发最佳实践.md`)
+  - 凭证管理最佳实践
+  - 安全设计核心原则
+  - 纵深防御策略
+
 ---
 
 ## How It Works
