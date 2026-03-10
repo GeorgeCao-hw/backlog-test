@@ -21,7 +21,78 @@
 
 **设计说明/归档：**
 
-![系统架构图](./images/架构图.png)
+**系统架构分层图**：
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#e91e63',
+    'primaryBorderColor': '#c2185b',
+    'primaryTextColor': '#ffffff',
+    'secondaryColor': '#2196f3',
+    'secondaryBorderColor': '#1565c0',
+    'secondaryTextColor': '#ffffff',
+    'tertiaryColor': '#4caf50',
+    'tertiaryBorderColor': '#388e3c',
+    'tertiaryTextColor': '#ffffff',
+    'notBkgColor': '#ff4444',
+    'notBorderColor': '#d32f2f',
+    'fontSize': '16px',
+    'fontFamily': 'arial'
+  }
+}}%%
+graph TB
+    subgraph "定时任务层"
+        CronJob["⏰ Kubernetes CronJob<br/>定期触发任务"]
+    end
+
+    subgraph "扫描编排层"
+        Orchestrator["🎯 扫描编排服务<br/>协调和管理流程"]
+    end
+
+    subgraph "凭证管理层"
+        CredMgr["🔐 凭证管理器<br/>加载凭证<br/>启动后删除"]
+    end
+
+    subgraph "扫描处理层"
+        LogScanner["📄 日志扫描器<br/>扫描最近3天日志"]
+        SecretScanner["🔍 敏感信息扫描器<br/>gitleaks检测"]
+        ResultParser["📊 结果解析器<br/>提取namespace和pod"]
+    end
+
+    subgraph "多云账号OBS层"
+        OBS1["☁️ 云账号1<br/>OBS日志桶"]
+        OBS2["☁️ 云账号2<br/>OBS日志桶"]
+        OBSn["☁️ 云账号N<br/>OBS日志桶"]
+    end
+
+    subgraph "报告处理层"
+        ReportGen["📋 报告生成器<br/>结构化报告"]
+        Encryptor["🔒 加密器<br/>AES-256加密"]
+    end
+
+    subgraph "结果存储层"
+        OBSResults["📦 OBS结果桶<br/>加密报告存储"]
+    end
+
+    subgraph "审计日志层"
+        AuditLogs["📊 审计日志<br/>脱敏操作记录"]
+    end
+
+    CronJob -->|触发| Orchestrator
+    Orchestrator -->|协调| CredMgr
+    CredMgr -->|提供凭证| LogScanner
+    OBS1 -->|提供日志| LogScanner
+    OBS2 -->|提供日志| LogScanner
+    OBSn -->|提供日志| LogScanner
+    LogScanner -->|日志数据| SecretScanner
+    SecretScanner -->|扫描结果| ResultParser
+    ResultParser -->|解析数据| ReportGen
+    ReportGen -->|报告| Encryptor
+    Encryptor -->|加密数据| OBSResults
+    Orchestrator -->|记录| AuditLogs
+```
 
 **架构说明：**
 
@@ -43,21 +114,46 @@
 
 **设计说明/归档：**
 
-![数据流图](./images/数据流图.png)
+**数据流程图**：
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#e91e63',
+    'primaryBorderColor': '#c2185b',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '16px'
+  }
+}}%%
+graph LR
+    A["📥 输入阶段<br/>读取配置和凭证"]
+    D["🗑️ 凭证清理<br/>读取完成后<br/>立即删除"]
+    B["🔍 处理阶段<br/>扫描、检测、解析、富化"]
+    C["📋 输出阶段<br/>生成报告和加密"]
+    E["📊 审计阶段<br/>记录脱敏日志"]
+    F["✅ 完成"]
+
+    A -->|云账号<br/>时间范围<br/>OBS凭证| D
+    D -->|覆写后删除| B
+    B -->|扫描配置<br/>最近3天日志<br/>敏感信息检测<br/>namespace和pod| C
+    C -->|JSON格式<br/>AES-256加密<br/>上传OBS| E
+    E -->|脱敏记录| F
+```
 
 **数据流说明：**
 
 1. **输入阶段**：读取扫描配置（云账号、时间范围）和OBS凭证（从配置文件）
-2. **处理阶段**：
+2. **凭证清理**：读取完成后立即删除凭证配置文件（覆写后删除），凭证保存在内存中供后续使用
+3. **处理阶段**：
    - 扫描：直接扫描挂载目录中最近三天的日志文件
    - 检测：使用gitleaks检测敏感信息
    - 解析：从扫描结果中提取namespace和pod
    - 富化：添加时间戳、日志来源等元数据
-3. **输出阶段**：
+4. **输出阶段**：
    - 生成JSON格式报告
    - 使用AES-256加密
    - 上传到OBS结果桶（设置严格访问权限）
-4. **清理阶段**：启动后立即删除凭证配置文件（覆写后删除）
 5. **审计阶段**：记录所有操作的脱敏日志，不记录完整的敏感信息
 
 ### 2.3 组件职责与接口
@@ -66,7 +162,37 @@
 
 **设计说明/归档：**
 
-| 组件名称 | 职责 | 输入 | 输出 | 接口/方法 |
+**组件交互时序图**：
+
+```mermaid
+sequenceDiagram
+    participant CronJob as Kubernetes CronJob
+    participant Orchestrator as 扫描编排服务
+    participant CredMgr as 凭证管理器
+    participant LogScanner as 日志扫描器
+    participant SecretScanner as 敏感信息扫描器
+    participant ReportGen as 报告生成器
+    participant Encryptor as 加密器
+    participant OBSResults as OBS结果桶
+
+    CronJob->>Orchestrator: start_scan(config)
+    Orchestrator->>CredMgr: load_credentials()
+    CredMgr-->>Orchestrator: 返回 OBS凭证(保存在内存)
+    CredMgr->>CredMgr: cleanup_credentials()<br/>(立即删除配置文件)
+    Orchestrator->>LogScanner: scan_directory(/mnt/obs/, time_range)
+    LogScanner-->>Orchestrator: 返回 日志文件列表
+    Orchestrator->>SecretScanner: scan_files(file_paths)
+    SecretScanner-->>Orchestrator: 返回 扫描结果(JSON.GZ)
+    Orchestrator->>ReportGen: generate_report(parsed_data)
+    ReportGen-->>Orchestrator: 返回 报告JSON
+    Orchestrator->>Encryptor: encrypt_report(report, key)
+    Encryptor-->>Orchestrator: 返回 加密报告(二进制)
+    Orchestrator->>OBSResults: upload_report(encrypted_data, target_path)
+    OBSResults-->>Orchestrator: 返回 上传状态
+```
+
+**组件接口定义表**：
+| 组件名称 | 功能描述 | 输入 | 输出 | 接口方法 |
 |---------|------|------|------|---------|
 | **扫描编排服务** | 协调整个扫描流程，管理生命周期 | 扫描配置(JSON) | 扫描状态、错误信息 | `start_scan(config)`, `get_status()`, `cancel_scan()` |
 | **凭证管理器** | 从配置文件读取凭证，启动后删除配置文件 | 配置文件路径 | OBS凭证(AK/SK) | `load_credentials()`, `cleanup_credentials()` |
@@ -98,6 +224,42 @@
 
 **设计说明/归档：**
 
+**工作分解结构（WBS）**：
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#d32f2f',
+    'primaryBorderColor': '#b71c1c',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '16px'
+  }
+}}%%
+graph TB
+    Root["🎯 LTS日志敏感信息扫描"]
+
+    Root --> Layer1["🏗️ 系统架构"]
+    Layer1 --> Cred["🔐 凭证管理模块"]
+    Layer1 --> Orchestrator["🎯 扫描编排服务"]
+    Layer1 --> LogMgmt["📄 日志扫描模块"]
+
+    Root --> Layer2["🔍 核心功能"]
+    Layer2 --> Scan["🔍 敏感信息扫描"]
+    Layer2 --> Parse["📊 结果解析"]
+    Layer2 --> Report["📋 报告生成"]
+
+    Root --> Layer3["🛡️ 数据保护"]
+    Layer3 --> Encrypt["🔒 加密存储"]
+    Layer3 --> Upload["⬆️ 安全上传"]
+    Layer3 --> Audit["📊 审计日志"]
+
+    Root --> Layer4["🧪 质量保证"]
+    Layer4 --> Test["✅ 单元测试"]
+    Layer4 --> Deploy["🚀 容器部署"]
+    Layer4 --> Monitor["📈 监控告警"]
+```
+
 **任务清单:**
 
 | 任务 ID | 功能任务描述 | 责任人 |
@@ -113,7 +275,53 @@
 
 **设计说明/归档：**
 
-![部署架构](./images/部署架构.png)
+**Kubernetes 部署架构图**：
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#ff6b6b',
+    'primaryBorderColor': '#ff5252',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '16px'
+  }
+}}%%
+graph TB
+    subgraph "Kubernetes Cluster"
+        CronJob["⏰ CronJob<br/>定时触发<br/>月度或按需"]
+
+        subgraph "Pod / Container"
+            ServiceAccount["🆔 ServiceAccount<br/>log-scanner"]
+            Container["🐳 Scanner Container<br/>非Root用户运行"]
+        end
+
+        subgraph "Kubernetes Storage"
+            Secret["🔐 Secret<br/>凭证和密钥"]
+            ConfigMap["⚙️ ConfigMap<br/>扫描配置<br/>云账号列表<br/>时间范围"]
+        end
+    end
+
+    subgraph "OBS Storage"
+        OBSLogs["📦 OBS日志桶<br/>NFS/S3挂载<br/>多云账号日志<br/>挂载点: /mnt/obs/"]
+        OBSResults["📦 OBS结果桶<br/>加密报告存储"]
+    end
+
+    subgraph "Log Management"
+        LogSystem["📊 日志系统<br/>脱敏日志<br/>保留90天"]
+        Monitoring["🚨 监控告警<br/>实时监控<br/>扫描状态"]
+    end
+
+    CronJob -->|创建Pod| Container
+    ServiceAccount -->|绑定| Container
+    Secret -->|挂载| Container
+    ConfigMap -->|挂载| Container
+    OBSLogs -->|挂载| Container
+    Container -->|读取日志| OBSLogs
+    Container -->|上传报告| OBSResults
+    Container -->|发送日志| LogSystem
+    Container -->|上报状态| Monitoring
+```
 
 **部署说明：**
 
@@ -154,13 +362,79 @@
 
 **威胁模型可视化：**
 
-![威胁模型](./images/威胁模型.png)
+在后续的 OWASP 威胁建模分析部分有详细的 Mermaid 图表表示。
 
 ### 3.1.2 安全设计实现 (Security Mechanisms)
 
 > **参考**：威胁模型评估与安全设计实现
 
 **设计说明/归档：**
+
+**安全防御机制全景**：
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#e91e63',
+    'primaryBorderColor': '#c2185b',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '16px'
+  }
+}}%%
+graph TB
+    subgraph "凭证保护"
+        A1["🔐 Kubernetes Secret<br/>加密存储凭证"]
+        A2["🗑️ 启动后立即删除<br/>覆写后删除"]
+        A3["🔄 凭证轮转<br/>30天周期"]
+        A1 --> A2
+        A2 --> A3
+    end
+
+    subgraph "数据传输保护"
+        B1["🔐 TLS 1.3<br/>传输加密"]
+        B2["🔒 HTTPS连接<br/>OBS API调用"]
+        B1 --> B2
+    end
+
+    subgraph "数据存储保护"
+        C1["🔒 AES-256加密<br/>报告加密"]
+        C2["✍️ HMAC-SHA256<br/>数据完整性"]
+        C3["📦 OBS SSE-KMS<br/>服务端加密"]
+        C1 --> C2
+        C2 --> C3
+    end
+
+    subgraph "访问控制"
+        D1["🔐 RBAC权限<br/>最小权限原则"]
+        D2["🆔 ServiceAccount<br/>Pod身份"]
+        D3["🔒 IAM策略<br/>OBS桶访问"]
+        D1 --> D2
+        D2 --> D3
+    end
+
+    subgraph "审计监控"
+        E1["📋 Kubernetes审计日志<br/>所有操作记录"]
+        E2["🔒 Object Lock<br/>日志不可删除"]
+        E3["👁️ 脱敏处理<br/>敏感信息掩码"]
+        E1 --> E2
+        E2 --> E3
+    end
+
+    subgraph "容器安全"
+        F1["🚫 非Root运行<br/>容器隔离"]
+        F2["📂 只读文件系统<br/>防篡改"]
+        F3["📊 资源限制<br/>防DoS"]
+        F1 --> F2
+        F2 --> F3
+    end
+
+    A1 -.-> B1
+    B1 -.-> C1
+    C1 -.-> D1
+    D1 -.-> E1
+    E1 -.-> F1
+```
 
 **凭证管理：**
 - ✅ 严禁硬编码：所有OBS凭证(AK/SK)存储在Kubernetes Secret或云密钥管理服务
@@ -317,569 +591,131 @@
 
 > **说明**：使用OWASP Threat Dragon方法论进行全面的威胁分析，采用STRIDE威胁分类模型和数据流图（DFD）方法。
 
-#### 威胁建模项目文件
-
-**项目文件**：
-- **PlantUML威胁建模**: [THREAT_MODELING_PLANTUML.md](./THREAT_MODELING_PLANTUML.md) ⭐ **主要文档**
-- **Mermaid图表版本**: [THREAT_MODELING_DIAGRAMS.md](./THREAT_MODELING_DIAGRAMS.md)
-- **详细导入指南**: [IMPORT_INSTRUCTIONS.md](./IMPORT_INSTRUCTIONS.md)
-- **工具**: [OWASP Threat Dragon Online](https://www.threatdragon.com/#/dashboard)
-
 ---
 
 #### 1. DFD数据流图 - 系统架构与威胁建模
 
 系统级的数据流图，包括外部实体、处理实体、存储实体、数据流和信任边界。
 
-**PlantUML DFD图**（详见 [THREAT_MODELING_PLANTUML.md](./THREAT_MODELING_PLANTUML.md) - 第1节）
-
-**关键元素**：
-
-| 元素类型 | 数量 | 描述 |
-|---------|------|------|
-| **外部实体(Actors)** | 3个 | Kubernetes CronJob、运维人员、攻击者 |
-| **处理实体(Processes)** | 9个 | P1-P9：扫描编排、凭证管理、日志扫描、敏感检测等 |
-| **存储实体(DataStores)** | 5个 | D1-D5：K8s Secrets、ConfigMap、OBS日志桶、OBS结果桶、审计日志 |
-| **数据流(Flows)** | 16条 | D1-D16：完整的数据流转链路 |
-| **信任边界** | 2个 | Kubernetes集群 + OBS存储 |
-
-**威胁向量**：
-- 攻击者 -.-> 扫描编排服务(P1)
-- 攻击者 -.-> 凭证管理器(P2)
-- 攻击者 -.-> OBS结果桶(D4)
-- 攻击者 -.-> Kubernetes Secrets(D1)
-
----
-
-#### 2. STRIDE威胁分类与分析
-
-使用STRIDE威胁建模方法，完整覆盖6个威胁类别的16个具体威胁。
-
-**PlantUML STRIDE矩阵**（详见 [THREAT_MODELING_PLANTUML.md](./THREAT_MODELING_PLANTUML.md) - 第2节）
-
-**STRIDE覆盖**：
-
-| 威胁类别 | 英文名称 | 中文含义 | 威胁数 | 高风险 |
-|---------|---------|---------|--------|--------|
-| **S** | Spoofing | 欺骗身份 | 2个 | 2个 🔴 |
-| **T** | Tampering | 数据篡改 | 3个 | 2个 🔴 + 1个 🟠 |
-| **R** | Repudiation | 否认操作 | 1个 | 1个 🟠 |
-| **I** | Information | 信息泄露 | 4个 | 3个 🔴 + 1个 🟠 |
-| **D** | Denial | 拒绝服务 | 3个 | 3个 🟠 |
-| **E** | Elevation | 权限提升 | 3个 | 3个 🔴 |
-| **总计** | **STRIDE** | **全覆盖** | **16个** | **10高 + 6中** |
-
-**具体威胁清单**：
-
-##### Spoofing（欺骗身份）- 2个威胁
-| ID | 威胁名称 | 风险 | 目标 | 攻击场景 | 缓解措施 |
-|----|---------|------|------|---------|---------|
-| S-001 | 伪造扫描任务身份 | 🔴高 | P1扫描编排 | 攻击者伪造CronJob注入恶意任务 | RBAC + ServiceAccount |
-| S-002 | 伪造OBS凭证 | 🔴高 | D1 K8s Secrets | 攻击者盗取凭证后冒用 | Secret加密 + 配置删除 |
-
-##### Tampering（数据篡改）- 3个威胁
-| ID | 威胁名称 | 风险 | 目标 | 攻击场景 | 缓解措施 |
-|----|---------|------|------|---------|---------|
-| T-001 | 篡改扫描结果 | 🔴高 | D4 OBS结果桶 | 篡改报告隐藏敏感发现 | AES-256 + HMAC签名 |
-| T-002 | 篡改配置文件 | 🟠中 | D2 ConfigMap | 修改扫描参数改变范围 | RBAC + 不可变ConfigMap |
-| T-003 | 篡改审计日志 | 🔴高 | D5 审计日志 | 删除日志掩盖痕迹 | Object Lock + 不可删除 |
-
-##### Repudiation（否认操作）- 1个威胁
-| ID | 威胁名称 | 风险 | 目标 | 攻击场景 | 缓解措施 |
-|----|---------|------|------|---------|---------|
-| R-001 | 否认扫描操作 | 🟠中 | P1扫描编排 | 否认执行过扫描或修改 | K8s审计日志 + 脱敏记录 |
-
-##### Information Disclosure（信息泄露）- 4个威胁
-| ID | 威胁名称 | 风险 | 目标 | 攻击场景 | 缓解措施 |
-|----|---------|------|------|---------|---------|
-| I-001 | 凭证泄露 | 🔴高 | D1 K8s Secrets | 从日志或内存获取凭证 | 配置删除 + 内存加密 |
-| I-002 | 扫描结果泄露 | 🔴高 | D4 OBS结果桶 | 访问报告获取敏感位置 | AES-256 + TLS 1.3 |
-| I-003 | 日志内容泄露 | 🔴高 | D3 OBS日志桶 | 直接访问原始敏感日志 | IAM策略 + 加密 |
-| I-004 | 审计日志泄露 | 🟠中 | D5 审计日志 | 读取脱敏日志推断行为 | 访问控制 + 加密 |
-
-##### Denial of Service（拒绝服务）- 3个威胁
-| ID | 威胁名称 | 风险 | 目标 | 攻击场景 | 缓解措施 |
-|----|---------|------|------|---------|---------|
-| D-001 | 资源耗尽 | 🟠中 | P1扫描编排 | 提交大量任务消耗资源 | 并发限制 + 超时 |
-| D-002 | 日志存储耗尽 | 🟠中 | D3 OBS日志桶 | 填充OBS导致存储溢出 | 容量限制 + 告警 |
-| D-003 | 扫描任务阻塞 | 🟠中 | P1扫描编排 | 注入恶意日志导致阻塞 | 超时机制 + 重试 |
-
-##### Elevation of Privilege（权限提升）- 3个威胁
-| ID | 威胁名称 | 风险 | 目标 | 攻击场景 | 缓解措施 |
-|----|---------|------|------|---------|---------|
-| E-001 | 容器逃逸 | 🔴高 | P3日志扫描器 | 利用容器漏洞逃逸 | Pod安全策略 + 只读FS |
-| E-002 | RBAC权限提升 | 🔴高 | P1扫描编排 | 通过RBAC链提升权限 | 最小权限 + 定期审计 |
-| E-003 | Secret访问提升 | 🔴高 | D1 K8s Secrets | 通过SA权限链提升 | RBAC细粒度 + 外部管理 |
-
----
-
-#### 3. 威胁风险评估矩阵
-
-**PlantUML风险评估**（详见 [THREAT_MODELING_PLANTUML.md](./THREAT_MODELING_PLANTUML.md) - 第3节）
-
-| 优先级 | 威胁数 | 风险类型 | 处理时间 | 威胁ID列表 |
-|--------|--------|---------|---------|-----------|
-| **P1** | 10个 | 高可能性 + 高严重性 | 立即处理 | S-001, S-002, T-001, T-003, I-001, I-002, I-003, E-001, E-002, E-003 |
-| **P2** | 6个 | 中等可能性或中等严重性 | 后续迭代 | T-002, R-001, I-004, D-001, D-002, D-003 |
-
----
-
-#### 4. 防御分层架构（6层纵深防御）
-
-**PlantUML防御层级**（详见 [THREAT_MODELING_PLANTUML.md](./THREAT_MODELING_PLANTUML.md) - 第4节）
-
-| 防御层 | 防御措施 | 关键技术 | 防御威胁 | 验证方法 |
-|--------|---------|---------|---------|---------|
-| **Layer 1** | 身份与访问控制 | Kubernetes RBAC<br/>ServiceAccount验证<br/>Secret加密<br/>Pod安全策略 | S-001, S-002, E-002, E-003 | RBAC权限测试 |
-| **Layer 2** | 数据保护与加密 | AES-256加密<br/>HMAC-SHA256签名<br/>TLS 1.3传输<br/>OBS SSE-KMS加密 | T-001, I-001, I-002, I-003, I-004 | 签名验证测试 |
-| **Layer 3** | 配置与凭证管理 | 配置文件启动后删除<br/>凭证30天轮换<br/>临时STS Token<br/>不可变ConfigMap | I-001, T-002 | 凭证轮转测试 |
-| **Layer 4** | 审计与监控 | Kubernetes审计日志<br/>脱敏日志记录<br/>不可变存储<br/>实时告警 | R-001, T-003, I-004 | 日志记录验证 |
-| **Layer 5** | 网络与容器隔离 | NetworkPolicy网络隔离<br/>只读文件系统<br/>非Root用户<br/>资源限制 | E-001, D-001, D-002, D-003 | seccomp/AppArmor测试 |
-| **Layer 6** | 存储与访问控制 | OBS桶策略<br/>IAM细粒度权限<br/>版本控制<br/>MFA删除保护 | I-002, I-003, T-001, T-003 | IAM访问测试 |
-
-**防御覆盖分析**：
-- 总缓解措施：**24个**
-- 威胁覆盖率：**100%** (16/16)
-- 平均每个威胁：**1.5个缓解措施**
-- 纵深防御：**任意单层失效时其他层承接**
-
----
-
-#### 5. 威胁建模关键指标
-
-```
-总体统计：
-├─ 威胁总数：16个 (100% STRIDE覆盖)
-├─ 高风险(P1)：10个 (62.5%)
-├─ 中风险(P2)：6个 (37.5%)
-├─ 防御层级：6层 (纵深设计)
-├─ 缓解措施：24个 (全面覆盖)
-└─ 实施成本：高 + 中等收益
-
-DFD关键元素：
-├─ 外部实体：3个 (CronJob/运维/攻击者)
-├─ 处理实体：9个 (P1-P9)
-├─ 存储实体：5个 (D1-D5)
-├─ 数据流：16条 (D1-D16)
-└─ 信任边界：2个 (K8s + OBS)
-
-STRIDE分布：
-├─ Spoofing：2个 (都是P1)
-├─ Tampering：3个 (2×P1 + 1×P2)
-├─ Repudiation：1个 (P2)
-├─ Information：4个 (3×P1 + 1×P2)
-├─ Denial：3个 (都是P2)
-└─ Elevation：3个 (都是P1)
-```
-
----
-
-#### 6. 实施路线图
-
-**第1阶段：P1高风险威胁（立即处理）**
-```
-□ Layer 1: 配置Kubernetes RBAC和ServiceAccount
-□ Layer 2: 实施AES-256加密和TLS 1.3
-□ Layer 3: 配置凭证自动删除和轮换
-□ Layer 4: 启用Kubernetes审计日志
-□ Layer 5: 配置Pod安全策略和只读文件系统
-□ Layer 6: 配置OBS IAM策略和Object Lock
-```
-
-**第2阶段：P2中风险威胁（后续迭代）**
-```
-□ 增强监控和告警机制
-□ 定期进行渗透测试
-□ 性能优化和资源限制调整
-□ 灾难恢复和应急预案
-□ 安全审计和合规验证
-```
-
----
-
-#### GitHub代码库
-
-**项目链接**：
-- **代码库**: [https://github.com/opensourceways/backlog/tree/main/opensourceways/issue_docs/67/Architecture%20Desgin](https://github.com/opensourceways/backlog/tree/main/opensourceways/issue_docs/67/Architecture%20Desgin)
-- **PlantUML威胁建模**: [THREAT_MODELING_PLANTUML.md](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/THREAT_MODELING_PLANTUML.md)
-- **Mermaid图表**: [THREAT_MODELING_DIAGRAMS.md](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/THREAT_MODELING_DIAGRAMS.md)
-- **导入指南**: [IMPORT_INSTRUCTIONS.md](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/IMPORT_INSTRUCTIONS.md)
-- **详细分析**: [OWASP_Threat_Analysis.md](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/OWASP_Threat_Analysis.md)
-
-完整的系统架构，包含所有参与者、流程、数据存储和数据流。
-
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#2196f3',
+    'primaryBorderColor': '#1565c0',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
 graph TB
-    subgraph "系统参与者"
-        CronJob["🕐 Kubernetes CronJob<br/>定时扫描触发"]
-        Ops["👤 运维人员<br/>配置和管理"]
-        Attacker["🔴 攻击者<br/>外部威胁"]
+    subgraph "External[外部交互者 (不信任)]"
+        Attacker["🔴 攻击者<br/>恶意请求"]
+        Ops["👤 运维人员<br/>配置管理"]
     end
 
-    subgraph "凭证与配置"
-        K8sSecrets["🔐 Kubernetes Secrets<br/>加密存储<br/>OBS凭证+密钥"]
-        ConfigMap["⚙️ ConfigMap<br/>扫描配置<br/>临时存储"]
+    subgraph "TrustBound1[信任边界1: Kubernetes集群 (受信任的执行环境)]"
+        subgraph "K8sResources[Kubernetes资源]"
+            CronJob["⏰ CronJob<br/>定时任务触发"]
+            Secret["🔐 Secret<br/>加密存储凭证"]
+            ConfigMap["⚙️ ConfigMap<br/>扫描配置"]
+        end
+
+        subgraph "ScanProcesses[扫描执行过程 - 容器内运行]"
+            Orchestrator["🎯 扫描编排服务<br/>协调生命周期"]
+            CredMgr["🔑 凭证管理器<br/>读取凭证<br/>读完立即删除"]
+            LogScanner["📄 日志扫描器<br/>扫描最近3天<br/>日志文件"]
+            SecretScanner["🔍 敏感信息扫描器<br/>gitleaks检测"]
+            ResultParser["📊 结果解析器<br/>提取namespace/pod"]
+            ReportGen["📋 报告生成器<br/>结构化报告"]
+            Encryptor["🔒 加密器<br/>AES-256加密"]
+            Signer["✍️ 签名器<br/>HMAC-SHA256"]
+            Uploader["⬆️ 结果上传器<br/>上传到OBS<br/>在容器内执行"]
+        end
     end
 
-    subgraph "扫描流程"
-        Orchestrator["🎯 扫描编排服务<br/>协调和管理<br/>生命周期"]
-        CredMgr["🔑 凭证管理器<br/>加载凭证<br/>启动后删除"]
-        LogScanner["📄 日志扫描器<br/>扫描最近3天<br/>的日志文件"]
-        SecretScanner["🔍 敏感信息扫描器<br/>gitleaks检测<br/>密钥、Token等"]
-        ResultParser["📊 结果解析器<br/>提取namespace<br/>和pod信息"]
+    subgraph "TrustBound2[信任边界2: 外部OBS存储 (不完全受信任)]"
+        OBSLogs["📦 OBS日志桶<br/>NFS/S3挂载<br/>多云日志"]
+        OBSResults["📦 OBS结果桶<br/>加密报告存储<br/>访问控制"]
+        AuditLogs["📋 审计日志<br/>脱敏记录<br/>Object Lock"]
     end
 
-    subgraph "结果处理"
-        ReportGen["📋 报告生成器<br/>结构化报告<br/>JSON格式"]
-        Encryptor["🔒 加密器<br/>AES-256加密<br/>数据保护"]
-        Signer["✍️ 签名器<br/>HMAC-SHA256<br/>完整性验证"]
-        Uploader["⬆️ 结果上传器<br/>上传到OBS<br/>访问控制"]
-    end
-
-    subgraph "存储与审计"
-        OBSLogs["📦 OBS日志桶<br/>NFS/S3挂载<br/>加密存储"]
-        OBSResults["📦 OBS结果桶<br/>加密报告<br/>访问权限"]
-        AuditLogs["📋 审计日志<br/>脱敏操作记录<br/>不可变存储"]
-    end
-
+    %% 内部交互
     CronJob -->|触发扫描| Orchestrator
-    Ops -->|配置管理| ConfigMap
-    K8sSecrets -->|读取凭证| CredMgr
+    Secret -->|读取凭证| CredMgr
     ConfigMap -->|读取配置| Orchestrator
-    CredMgr -->|删除配置| ConfigMap
+    Orchestrator -->|协调| CredMgr
     Orchestrator -->|协调| LogScanner
-    Orchestrator -->|协调| SecretScanner
-    OBSLogs -->|日志数据| LogScanner
     LogScanner -->|扫描结果| SecretScanner
     SecretScanner -->|检测结果| ResultParser
     ResultParser -->|解析数据| ReportGen
-    ReportGen -->|报告| Encryptor
+    ReportGen -->|报告JSON| Encryptor
     Encryptor -->|加密数据| Signer
     Signer -->|签名数据| Uploader
-    Uploader -->|上传| OBSResults
-    Orchestrator -->|记录| AuditLogs
-    Attacker -.->|威胁向量| Orchestrator
-    Attacker -.->|威胁向量| CredMgr
-    Attacker -.->|威胁向量| OBSResults
+    Orchestrator -->|审计记录| AuditLogs
 
-    style Attacker fill:#ff9999
-    style K8sSecrets fill:#ffeb99
-    style OBSLogs fill:#ffeb99
-    style OBSResults fill:#99ccff
-    style AuditLogs fill:#99ff99
+    %% 跨越边界的数据流（关键风险点）
+    LogScanner -->|日志数据| OBSLogs
+    OBSLogs -->|日志文件| LogScanner
+    Uploader -->|加密报告+签名| OBSResults
+
+    %% 外部交互（威胁向量）
+    Ops -->|配置变更| ConfigMap
+    Ops -->|查看报告| OBSResults
+    Attacker -.->|试图注入恶意任务| CronJob
+    Attacker -.->|窃听通信| LogScanner
+    Attacker -.->|访问OBS凭证| Secret
+    Attacker -.->|篡改OBS数据| OBSResults
 ```
+
+**信任边界说明：**
+
+| 边界 | 范围 | 特性 | 威胁向量 |
+|------|------|------|---------|
+| **信任边界1** | Kubernetes集群内部 | 受信任执行环境<br/>Kubernetes RBAC保护<br/>网络隔离<br/>**包含：所有扫描过程和上传器** | 内部提权、配置篡改 |
+| **信任边界2** | 外部OBS存储 | 网络通信<br/>数据存储<br/>不完全受控 | 网络嗅探、数据篡改、凭证泄露 |
+| **外部交互者** | 运维人员、攻击者 | 不信任<br/>恶意或误操作 | 注入恶意任务、配置篡改、数据访问 |
+
+**关键跨越信任边界的数据流（高风险）：**
+
+1. **日志数据流** (LogScanner ↔ OBSLogs)
+   - 风险：网络嗅探、日志修改
+   - 缓解：TLS 1.3加密、IAM访问控制
+
+2. **加密报告上传** (Uploader → OBSResults) ⭐ **关键跨越点**
+   - 风险：中间人攻击、报告泄露、上传过程中的凭证暴露
+   - 缓解：HMAC签名验证、AES-256加密、TLS 1.3、Object Lock
+   - 说明：上传器在容器内执行，OBS凭证通过内存中的凭证完成认证
+
+3. **凭证传输** (Secret → CredMgr) ⭐ **关键跨越点**
+   - 风险：凭证泄露、密钥劫持
+   - 缓解：启动后立即删除、内存加密、Secret挂载为只读
+
+4. **运维配置变更** (Ops → ConfigMap) ⭐ **信任边界入口点**
+   - 风险：恶意配置注入、权限提升
+   - 缓解：RBAC权限控制、不可变ConfigMap、审计日志
 
 ---
 
-#### 2. STRIDE威胁分类矩阵
+**威胁分析详情** (STRIDE方法，16个威胁)：
 
-16个威胁按STRIDE分类，标注风险等级和缓解措施。
-
-```mermaid
-graph LR
-    subgraph "Spoofing<br/>欺骗身份"
-        S1["S-001: 伪造扫描任务身份<br/>风险: 🔴高<br/>目标: 扫描编排服务<br/>缓解: RBAC + ServiceAccount"]
-        S2["S-002: 伪造OBS凭证<br/>风险: 🔴高<br/>目标: K8s Secrets<br/>缓解: Secret加密 + 配置删除"]
-    end
-
-    subgraph "Tampering<br/>数据篡改"
-        T1["T-001: 篡改扫描结果<br/>风险: 🔴高<br/>目标: OBS结果桶<br/>缓解: AES-256 + HMAC签名"]
-        T2["T-002: 篡改配置文件<br/>风险: 🟠中<br/>目标: ConfigMap<br/>缓解: RBAC + 不可变"]
-        T3["T-003: 篡改审计日志<br/>风险: 🔴高<br/>目标: 审计日志<br/>缓解: Object Lock + 不可删除"]
-    end
-
-    subgraph "Repudiation<br/>否认操作"
-        R1["R-001: 否认扫描操作<br/>风险: 🟠中<br/>目标: 扫描编排服务<br/>缓解: 审计日志 + 脱敏记录"]
-    end
-
-    subgraph "Information<br/>信息泄露"
-        I1["I-001: 凭证泄露<br/>风险: 🔴高<br/>目标: K8s Secrets<br/>缓解: 配置删除 + 内存加密"]
-        I2["I-002: 扫描结果泄露<br/>风险: 🔴高<br/>目标: OBS结果桶<br/>缓解: AES-256 + TLS"]
-        I3["I-003: 日志内容泄露<br/>风险: 🔴高<br/>目标: OBS日志桶<br/>缓解: IAM策略 + 加密"]
-        I4["I-004: 审计日志泄露<br/>风险: 🟠中<br/>目标: 审计日志<br/>缓解: 访问控制 + 加密"]
-    end
-
-    subgraph "Denial<br/>拒绝服务"
-        D1["D-001: 资源耗尽<br/>风险: 🟠中<br/>目标: 扫描编排服务<br/>缓解: 限制并发 + 超时"]
-        D2["D-002: 日志存储耗尽<br/>风险: 🟠中<br/>目标: OBS日志桶<br/>缓解: 容量限制 + 告警"]
-        D3["D-003: 扫描任务阻塞<br/>风险: 🟠中<br/>目标: 扫描编排服务<br/>缓解: 超时机制 + 重试"]
-    end
-
-    subgraph "Elevation<br/>权限提升"
-        E1["E-001: 容器逃逸<br/>风险: 🔴高<br/>目标: 扫描容器<br/>缓解: Pod安全策略 + 只读FS"]
-        E2["E-002: RBAC权限提升<br/>风险: 🔴高<br/>目标: 扫描编排服务<br/>缓解: 最小权限 + 审计"]
-        E3["E-003: Secret访问提升<br/>风险: 🔴高<br/>目标: K8s Secrets<br/>缓解: RBAC限制 + 外部管理"]
-    end
-
-    style S1 fill:#ffcccc
-    style S2 fill:#ffcccc
-    style T1 fill:#ffcccc
-    style T2 fill:#ffffcc
-    style T3 fill:#ffcccc
-    style R1 fill:#ffffcc
-    style I1 fill:#ffcccc
-    style I2 fill:#ffcccc
-    style I3 fill:#ffcccc
-    style I4 fill:#ffffcc
-    style D1 fill:#ffffcc
-    style D2 fill:#ffffcc
-    style D3 fill:#ffffcc
-    style E1 fill:#ffcccc
-    style E2 fill:#ffcccc
-    style E3 fill:#ffcccc
-```
-
----
-
-#### 3. 威胁优先级矩阵
-
-P1（高风险10个）vs P2（中风险6个）的分布。
-
-```mermaid
-graph TB
-    subgraph "高可能性 + 高严重性 (P1优先级)"
-        P1["🔴 10个高风险威胁<br/>S-001, S-002, T-001, T-003<br/>I-001, I-002, I-003, E-001, E-002, E-003<br/>需要立即实施缓解措施"]
-    end
-
-    subgraph "中等可能性 或 中等严重性 (P2优先级)"
-        P2["🟠 6个中风险威胁<br/>T-002, R-001, I-004, D-001, D-002, D-003<br/>在下一个迭代中处理"]
-    end
-
-    style P1 fill:#ffcccc
-    style P2 fill:#ffffcc
-```
-
----
-
-#### 4. 威胁与防御措施映射
-
-6层防御如何覆盖所有威胁。
-
-```mermaid
-graph TB
-    subgraph "威胁向量"
-        TH1["🎯 Spoofing<br/>身份欺骗<br/>2个威胁"]
-        TH2["✏️ Tampering<br/>数据篡改<br/>3个威胁"]
-        TH3["❌ Repudiation<br/>否认操作<br/>1个威胁"]
-        TH4["👁️ Information<br/>信息泄露<br/>4个威胁"]
-        TH5["💥 Denial<br/>拒绝服务<br/>3个威胁"]
-        TH6["🔝 Elevation<br/>权限提升<br/>3个威胁"]
-    end
-
-    subgraph "防御层1: 身份与访问"
-        D1["🔐 Kubernetes RBAC"]
-        D2["🆔 ServiceAccount"]
-        D3["🔑 Secret加密"]
-        D4["🚫 Pod安全策略"]
-    end
-
-    subgraph "防御层2: 数据保护"
-        D5["🔒 AES-256加密"]
-        D6["✍️ HMAC-SHA256"]
-        D7["🔐 TLS 1.3"]
-        D8["📦 OBS加密"]
-    end
-
-    subgraph "防御层3: 配置管理"
-        D9["🗑️ 配置文件删除"]
-        D10["⏱️ 凭证轮换"]
-        D11["🔄 临时凭证"]
-        D12["🚫 不可变ConfigMap"]
-    end
-
-    subgraph "防御层4: 审计监控"
-        D13["📋 Kubernetes审计"]
-        D14["🔒 不可变存储"]
-        D15["👁️ 日志脱敏"]
-    end
-
-    subgraph "防御层5: 网络隔离"
-        D16["🌐 NetworkPolicy"]
-        D17["🚫 只读文件系统"]
-        D18["👤 非Root用户"]
-    end
-
-    subgraph "防御层6: 存储控制"
-        D19["🔐 OBS桶策略"]
-        D20["🔒 IAM策略"]
-        D21["🔄 版本控制"]
-    end
-
-    TH1 --> D1
-    TH1 --> D2
-    TH1 --> D13
-
-    TH2 --> D5
-    TH2 --> D6
-    TH2 --> D12
-    TH2 --> D14
-
-    TH3 --> D13
-    TH3 --> D15
-
-    TH4 --> D3
-    TH4 --> D5
-    TH4 --> D7
-    TH4 --> D8
-    TH4 --> D9
-    TH4 --> D15
-    TH4 --> D19
-    TH4 --> D20
-
-    TH5 --> D4
-    TH5 --> D10
-
-    TH6 --> D1
-    TH6 --> D17
-    TH6 --> D18
-    TH6 --> D20
-
-    style TH1 fill:#ffcccc
-    style TH2 fill:#ffcccc
-    style TH3 fill:#ffffcc
-    style TH4 fill:#ffcccc
-    style TH5 fill:#ffffcc
-    style TH6 fill:#ffcccc
-
-    style D1 fill:#ccffcc
-    style D2 fill:#ccffcc
-    style D3 fill:#ccffcc
-    style D4 fill:#ccffcc
-    style D5 fill:#ccddff
-    style D6 fill:#ccddff
-    style D7 fill:#ccddff
-    style D8 fill:#ccddff
-    style D9 fill:#ffddcc
-    style D10 fill:#ffddcc
-    style D11 fill:#ffddcc
-    style D12 fill:#ffddcc
-    style D13 fill:#ffccdd
-    style D14 fill:#ffccdd
-    style D15 fill:#ffccdd
-    style D16 fill:#ddddff
-    style D17 fill:#ddddff
-    style D18 fill:#ddddff
-    style D19 fill:#ddffdd
-    style D20 fill:#ddffdd
-    style D21 fill:#ddffdd
-```
-
----
-
-#### 5. 威胁统计仪表板
-
-```mermaid
-graph LR
-    subgraph "威胁总数"
-        TOTAL["总威胁数<br/><b>16个</b>"]
-    end
-
-    subgraph "风险分布"
-        HIGH["🔴 高风险<br/><b>10个</b><br/>(62.5%)"]
-        MEDIUM["🟠 中风险<br/><b>6个</b><br/>(37.5%)"]
-    end
-
-    subgraph "STRIDE分布"
-        S["Spoofing<br/>2"]
-        T["Tampering<br/>3"]
-        R["Repudiation<br/>1"]
-        I["Information<br/>4"]
-        D["Denial<br/>3"]
-        E["Elevation<br/>3"]
-    end
-
-    subgraph "防御能力"
-        DEFENSE["防御层级<br/><b>6层</b><br/>防御措施<br/><b>24个</b>"]
-    end
-
-    TOTAL --> HIGH
-    TOTAL --> MEDIUM
-    HIGH --> S
-    HIGH --> T
-    HIGH --> I
-    HIGH --> E
-    MEDIUM --> R
-    MEDIUM --> D
-    S --> DEFENSE
-    T --> DEFENSE
-    R --> DEFENSE
-    I --> DEFENSE
-    D --> DEFENSE
-    E --> DEFENSE
-
-    style TOTAL fill:#ff6b6b
-    style HIGH fill:#ffcccc
-    style MEDIUM fill:#ffffcc
-    style S fill:#ffeeee
-    style T fill:#ffeeee
-    style R fill:#ffffee
-    style I fill:#ffeeee
-    style D fill:#ffffee
-    style E fill:#ffeeee
-    style DEFENSE fill:#ccffcc
-```
-
----
-
-#### 威胁统计信息
-
-**威胁总体统计**：
-
-| 指标 | 数量 |
-|-----|------|
-| 总威胁数 | 16个 |
-| 高风险(P1) | 10个 |
-| 中风险(P2) | 6个 |
-| 防御措施 | 24个 |
-| 防御层级 | 6层 |
-| 覆盖的STRIDE类别 | 6个 |
-
-**威胁分布**：
-
-- **Spoofing (欺骗)**: 2个高风险威胁
-- **Tampering (篡改)**: 3个高风险威胁 + 1个中风险威胁
-- **Repudiation (否认)**: 1个中风险威胁
-- **Information Disclosure (信息泄露)**: 3个高风险威胁 + 1个中风险威胁
-- **Denial of Service (拒绝服务)**: 3个中风险威胁
-- **Elevation of Privilege (权限提升)**: 3个高风险威胁
-
-#### 威胁详细分析
-
-详见 [OWASP_Threat_Analysis.md](./OWASP_Threat_Analysis.md)
-
-**威胁优先级总结（P1 - 高优先级）**：
-
-| 威胁ID | 威胁名称 | 风险等级 | 优先级 |
-|--------|---------|---------|--------|
-| S-001 | 伪造扫描任务身份 | 🔴 高 | P1 |
-| S-002 | 伪造OBS凭证 | 🔴 高 | P1 |
-| T-001 | 篡改扫描结果 | 🔴 高 | P1 |
-| T-003 | 篡改审计日志 | 🔴 高 | P1 |
-| I-001 | 凭证泄露 | 🔴 高 | P1 |
-| I-002 | 扫描结果泄露 | 🔴 高 | P1 |
-| I-003 | 日志内容泄露 | 🔴 高 | P1 |
-| E-001 | 容器逃逸 | 🔴 高 | P1 |
-| E-002 | RBAC权限提升 | 🔴 高 | P1 |
-| E-003 | Secret访问权限提升 | 🔴 高 | P1 |
-
-**威胁优先级总结（P2 - 中等优先级）**：
-
-| 威胁ID | 威胁名称 | 风险等级 | 优先级 |
-|--------|---------|---------|--------|
-| T-002 | 篡改配置文件 | 🟠 中 | P2 |
-| R-001 | 否认扫描操作 | 🟠 中 | P2 |
-| I-004 | 审计日志泄露 | 🟠 中 | P2 |
-| D-001 | 资源耗尽 | 🟠 中 | P2 |
-| D-002 | 日志存储耗尽 | 🟠 中 | P2 |
-| D-003 | 扫描任务阻塞 | 🟠 中 | P2 |
-
-#### GitHub代码库
-
-**项目链接**：
-- **代码库**: [https://github.com/opensourceways/backlog/tree/main/opensourceways/issue_docs/67/Architecture%20Desgin](https://github.com/opensourceways/backlog/tree/main/opensourceways/issue_docs/67/Architecture%20Desgin)
-- **威胁建模文件**: [threat-model-complete.json](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/threat-model-complete.json)
-- **导入指南**: [IMPORT_INSTRUCTIONS.md](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/IMPORT_INSTRUCTIONS.md)
-- **威胁分析**: [OWASP_Threat_Analysis.md](https://github.com/opensourceways/backlog/blob/main/opensourceways/issue_docs/67/Architecture%20Desgin/OWASP_Threat_Analysis.md)
+| 威胁ID | 威胁名称 | STRIDE类别 | 风险等级 | 威胁目标 | 攻击场景 | 缓解措施 |
+|--------|---------|-----------|---------|---------|---------|---------|
+| S-001 | 伪造扫描任务身份 | Spoofing | 🔴 高 | 扫描编排服务 | 攻击者伪造CronJob注入恶意任务 | RBAC + ServiceAccount验证 |
+| S-002 | 伪造OBS凭证 | Spoofing | 🔴 高 | K8s Secrets | 攻击者盗取凭证后冒用 | Secret加密 + 配置启动后删除 |
+| T-001 | 篡改扫描结果 | Tampering | 🔴 高 | OBS结果桶 | 篡改报告隐藏敏感发现 | AES-256加密 + HMAC签名 |
+| T-002 | 篡改配置文件 | Tampering | 🟠 中 | ConfigMap | 修改扫描参数改变范围 | RBAC + 不可变ConfigMap |
+| T-003 | 篡改审计日志 | Tampering | 🔴 高 | 审计日志 | 删除日志掩盖痕迹 | Object Lock + 不可删除属性 |
+| R-001 | 否认扫描操作 | Repudiation | 🟠 中 | 扫描编排服务 | 否认执行过扫描或修改 | K8s审计日志 + 脱敏记录 |
+| I-001 | 凭证泄露 | Information | 🔴 高 | K8s Secrets | 从日志或内存获取凭证 | 配置启动后删除 + 内存加密 |
+| I-002 | 扫描结果泄露 | Information | 🔴 高 | OBS结果桶 | 访问报告获取敏感位置信息 | AES-256加密 + TLS 1.3 |
+| I-003 | 日志内容泄露 | Information | 🔴 高 | OBS日志桶 | 直接访问原始敏感日志 | IAM策略 + OBS桶加密 |
+| I-004 | 审计日志泄露 | Information | 🟠 中 | 审计日志 | 读取脱敏日志推断行为 | 访问控制 + 日志加密 |
+| D-001 | 资源耗尽 | Denial | 🟠 中 | 扫描编排服务 | 提交大量任务消耗资源 | 并发限制 + 超时机制 |
+| D-002 | 日志存储耗尽 | Denial | 🟠 中 | OBS日志桶 | 填充OBS导致存储溢出 | 容量限制 + 监控告警 |
+| D-003 | 扫描任务阻塞 | Denial | 🟠 中 | 扫描编排服务 | 注入恶意日志导致阻塞 | 超时机制 + 自动重试 |
+| E-001 | 容器逃逸 | Elevation | 🔴 高 | 扫描容器 | 利用容器漏洞逃逸 | Pod安全策略 + 只读文件系统 |
+| E-002 | RBAC权限提升 | Elevation | 🔴 高 | 扫描编排服务 | 通过RBAC链提升权限 | 最小权限原则 + 定期审计 |
+| E-003 | Secret访问提升 | Elevation | 🔴 高 | K8s Secrets | 通过ServiceAccount权限链提升 | RBAC细粒度控制 + 外部密钥管理 |
 
 ---
 
