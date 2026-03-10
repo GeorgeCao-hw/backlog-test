@@ -235,7 +235,38 @@ Cvrf
 
 **设计说明/归档：**
 
-#### 3.1.1 安全消减措施
+#### 3.1.1 威胁建模图
+
+```mermaid
+flowchart LR
+    Attacker([外部攻击者])
+    Operator([运维人员])
+
+    subgraph trust["信任边界：内网 / VPN"]
+        Gateway["网关层\nIP 白名单过滤\n仅 HTTPS 443"]
+        API["POST /releaseMultiArch\nmanagerAuth 鉴权\nmanagerLimit 限流"]
+        Handle["业务逻辑层\nReleaseMultiArch"]
+        DB[(MySQL\ncve_release_multi_arch)]
+        OBS[(OBS\nCVRF XML)]
+        KMS[(KMS/Vault\n密码分发)]
+    end
+
+    Attacker -->|T1 仿冒请求| Gateway
+    Gateway -->|非白名单 IP，拒绝| Attacker
+
+    Operator -->|合法内网请求| Gateway
+    Gateway -->|白名单通过| API
+
+    API -->|T2 弱密码/密码泄露\n消减: 强密码 + 定期轮转| KMS
+    KMS -->|注入凭证| API
+
+    API -->|T3 参数篡改\n消减: 参数格式校验| Handle
+    Handle -->|T4 重放/重复发布\n消减: 幂等检查| DB
+    Handle -->|T5 非授权文件覆盖\n消减: OBS 路径由服务端构造| OBS
+    Handle -->|T6 高频刷接口 DoS\n消减: 30s 限流一次| API
+```
+
+#### 3.1.2 安全消减措施
 
 **凭证安全**
 
