@@ -50,52 +50,52 @@ graph TD
 
 ```mermaid
 flowchart TD
-    Operator([运维人员]) -->|"POST /releaseMultiArch\ndir=openEuler_24.03_riscv64\ndate=... & version=openEuler-24.03-LTS"| Controller
+    Operator([运维人员]) -->|POST /releaseMultiArch\ndir / date / version| Controller
 
-    Controller["controller: releaseMultiArch()\n版本/日期/dir 非空\ndir 按'_'拆分 → split[2]='riscv64'\n构造 ArchParam{Dir, Arch:'riscv64', Date, Version}"]
+    Controller["controller: releaseMultiArch\n版本/日期/dir 非空\ndir 按下划线拆分，第3段为 Arch\n构造 ArchParam 传入 Dir/Arch/Date/Version"]
     Controller --> Step1
 
-    Step1["Step1: getRpms(param)\nArchParam.CsvOfPackagesUrl() → 主仓 CSV URL\nArchParam.CsvOfEpolPackagesUrl() → EPOL CSV URL\nparseCsv() → map[组件名][]rpm{Name, IsEpol}"]
-    Step1 -->|"map 为空"| ErrEnd([返回 error，终止])
-    Step1 -->|"map 非空"| Step2
+    Step1["Step1: getRpms(param)\nCsvOfPackagesUrl: 主仓 CSV URL\nCsvOfEpolPackagesUrl: EPOL CSV URL\nparseCsv: 返回 map 组件名到 rpm 列表"]
+    Step1 -->|map 为空| ErrEnd([返回 error，终止])
+    Step1 -->|map 非空| Step2
 
-    Step2["Step2: dao.DefaultSecurityNotice.NoticeForMultiArch(version, components, dates)\n查询 cve_security_notice 表 → []CveSecurityNotice"]
+    Step2["Step2: NoticeForMultiArch(version, components, dates)\n查询 cve_security_notice 表，返回公告列表"]
     Step2 --> LoopCheck
 
     LoopCheck{逐条公告循环}
-    LoopCheck -->|"ContainsProduct(version) 精确过滤"| CheckReleased
-    LoopCheck -->|"全部处理完毕"| UploadFixed
+    LoopCheck -->|ContainsProduct 精确过滤| CheckReleased
+    LoopCheck -->|全部处理完毕| UploadFixed
 
-    CheckReleased["checkWhetherReleased(noticeNo, param)\ndao.DefaultReleaseMultiArch.Find(Arch, SecurityNoticeNo, AffectedProduct)"]
-    CheckReleased -->|"已存在记录，幂等跳过"| LoopCheck
-    CheckReleased -->|"不存在记录"| Download
+    CheckReleased["checkWhetherReleased(noticeNo, param)\nFind(Arch, SecurityNoticeNo, AffectedProduct)"]
+    CheckReleased -->|已存在记录，幂等跳过| LoopCheck
+    CheckReleased -->|不存在记录| Download
 
-    Download["localutils.DownloadFile(n.PathOfObs())\nOBS 路径: DownloadCvrf{year}/cvrf-{noticeNo}.xml → []byte"]
-    Download -->|"失败: multiArchLog + continue"| LoopCheck
-    Download -->|"成功"| ParseXML
+    Download["DownloadFile(n.PathOfObs())\nOBS 路径: DownloadCvrf_year/cvrf-noticeNo.xml\n返回 XML 字节内容"]
+    Download -->|失败: multiArchLog + continue| LoopCheck
+    Download -->|成功| ParseXML
 
-    ParseXML["xml.Unmarshal → Cvrf 结构体\nCvrf.ProductTree.OpenEulerBranch[]"]
+    ParseXML["xml.Unmarshal 解析为 Cvrf 结构体\nCvrf.ProductTree.OpenEulerBranch 列表"]
     ParseXML --> UpdateCVRF
 
-    UpdateCVRF["updateCvrfWithNewArch(&cvrf, param, packages)\ngenerateFullProductName(version, rpms)\n  cpe = 'cpe:/a:openEuler:openEuler:24.03-LTS'\n  FullProductName{ProductId, Cpe, IsEpol, rpm包名}\n已存在 Name='riscv64' Branch → append FullProductName\n否则 → 新建 OpenEulerBranch{Type:'Package Arch', Name:'riscv64'}"]
+    UpdateCVRF["updateCvrfWithNewArch(cvrf, param, packages)\ngenerateFullProductName: 生成 FullProductName\n  cpe = cpe:/a:openEuler:openEuler:24.03-LTS\n已存在 riscv64 Branch: append FullProductName\n否则: 新建 riscv64 OpenEulerBranch"]
     UpdateCVRF --> MarshalXML
 
-    MarshalXML["cvrfToXml(&cvrf)\nsetNamespaceOfXml() 手动补全 XML 命名空间属性\nxml.MarshalIndent → []byte"]
+    MarshalXML["cvrfToXml(cvrf)\nsetNamespaceOfXml: 补全 XML 命名空间属性\nxml.MarshalIndent 序列化为字节"]
     MarshalXML --> UploadFile
 
-    UploadFile["localutils.UploadFile(obsPath, bytes.NewReader(updatedXml))\n覆盖写回 OBS 原路径"]
-    UploadFile -->|"失败: multiArchLog + continue"| LoopCheck
-    UploadFile -->|"成功"| SyncSA
+    UploadFile["UploadFile(obsPath, updatedXml)\n覆盖写回 OBS 原路径"]
+    UploadFile -->|失败: multiArchLog + continue| LoopCheck
+    UploadFile -->|成功| SyncSA
 
-    SyncSA["SyncSA(n.PathToSyncSA())\n解析 CVRF → 数据库事务:\nDeleteSecurityByNo + CreateSecurity\nDeletePackagesByNo + CreatePackage\nDeleteReferencesByNo + CreateReference"]
-    SyncSA -->|"失败: multiArchLog + continue"| LoopCheck
-    SyncSA -->|"成功"| WriteRecord
+    SyncSA["SyncSA(n.PathToSyncSA())\n解析 CVRF，执行数据库事务:\nDeleteSecurityByNo + CreateSecurity\nDeletePackagesByNo + CreatePackage\nDeleteReferencesByNo + CreateReference"]
+    SyncSA -->|失败: multiArchLog + continue| LoopCheck
+    SyncSA -->|成功| WriteRecord
 
-    WriteRecord["dao.DefaultReleaseMultiArch.Create(CveReleaseMultiArch)\nArch='riscv64'\nAffectedComponent / AffectedProduct\nSecurityNoticeNo"]
+    WriteRecord["DefaultReleaseMultiArch.Create(CveReleaseMultiArch)\nArch=riscv64\nAffectedComponent / AffectedProduct\nSecurityNoticeNo"]
     WriteRecord --> LoopCheck
 
     UploadFixed["uploadUpdateFixed(updatedFilename)\n将本次发布的文件列表写入 OBS update-fixed 文件"]
-    UploadFixed --> Response([返回 []string 成功发布的 CVRF 相对路径列表])
+    UploadFixed --> Response([返回成功发布的 CVRF 相对路径列表])
 ```
 
 ### 2.3 组件职责与接口
@@ -233,7 +233,25 @@ Cvrf
 
 ### 3.1 安全与隐私设计评估和设计
 
-> 需求判定标签为 `need_design`，未判定 `need_security`，本章节不适用，删除。
+**设计说明/归档：**
+
+#### 3.1.1 安全消减措施
+
+**凭证安全**
+
+| 项目 | 要求 |
+|------|------|
+| 密码强度 | 长度 ≥ 16 位，包含大小写字母、数字及特殊字符，禁止使用默认密码或与用户名相同的密码 |
+| 分发方式 | 通过密钥管理系统（KMS/Vault）下发至部署环境，禁止明文写入配置文件或代码仓库；生产环境以环境变量或加密 Secret 方式注入 |
+| 定期轮转 | 管理员密码每 90 天强制轮转一次，轮转后旧密码立即失效，轮转操作记录写入审计日志 |
+
+**访问控制（白名单）**
+
+| 项目 | 要求 |
+|------|------|
+| 调用方 IP 白名单 | `POST /releaseMultiArch` 接口仅对白名单内的内网 IP 或 VPN 出口 IP 开放，网关层拒绝所有不在白名单内的来源请求 |
+| 白名单维护 | 白名单配置纳入变更管理，新增/删除 IP 须经审批并同步更新网关规则；白名单条目每季度审查，移除失效条目 |
+| 端口最小化 | 接口仅开放 HTTPS 443 端口，不额外开放其他端口 |
 
 ---
 
