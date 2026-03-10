@@ -344,25 +344,129 @@ graph TB
 
 > 关注点：防御能力与合规边界。
 
-### 3.1.1 威胁分析 (Threat Modeling)
+### 3.1.1 威胁建模与数据流分析 (Threat Modeling)
 
-> 基于 **STRIDE** 或类似模型，识别本项目可能面临的安全威胁。
+> 基于 **STRIDE** 方法，通过DFD数据流图识别系统中的关键数据流和风险点。
 
 **设计说明/归档：**
 
-| 威胁类别 | 攻击场景描述 (Scenario) | 风险等级 | 对应减缓措施 (Mitigation) |
-|---------|----------------------|--------|------------------------|
-| **信息泄露** | 攻击者通过网络嗅探或日志文件访问，获取OBS凭证(AK/SK) | 高 | 凭证存储在Kubernetes Secret或云密钥管理服务，不硬编码；传输使用TLS 1.2+加密 |
-| **信息泄露** | 扫描结果中包含敏感信息（密钥、Token等），被未授权访问 | 高 | 扫描报告使用AES-256加密存储；OBS结果桶设置严格的访问权限（仅授权用户可读） |
-| **信息泄露** | 审计日志中记录了完整的敏感信息，导致日志泄露 | 中 | 审计日志实现脱敏，不记录完整的敏感信息内容，仅记录操作类型和时间戳 |
-| **篡改/伪造** | 攻击者篡改扫描结果报告，隐藏真实的敏感信息问题 | 高 | 报告使用HMAC签名，确保完整性；存储在OBS时设置版本控制和不可修改属性 |
-| **拒绝服务** | 攻击者通过大量扫描请求或恶意日志文件，导致扫描服务过载 | 中 | 限制并发扫描任务数量；对日志文件大小设置上限；实现扫描超时机制 |
-| **权限提升** | 扫描任务以过高权限运行，被利用进行横向移动 | 中 | 扫描任务以最小权限原则运行，仅具有OBS读权限和结果桶写权限；容器以非Root用户运行 |
-| **隐私泄露** | 扫描过程中，日志文件被临时存储在不安全的位置，导致敏感信息泄露 | 中 | 临时文件存储在加密的本地存储或内存中；扫描完成后立即删除临时文件 |
+**DFD数据流图 - 信任边界与关键数据流**：
 
-**威胁模型可视化：**
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#2196f3',
+    'primaryBorderColor': '#1565c0',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
+graph TB
+    subgraph "TrustBound1[信任边界1: Kubernetes集群内执行]"
+        subgraph "Trigger[定时触发]"
+            CronJob["⏰ CronJob<br/>定时任务"]
+        end
 
-在后续的 OWASP 威胁建模分析部分有详细的 Mermaid 图表表示。
+        subgraph "Orchestration[编排与管理]"
+            Orchestrator["🎯 扫描编排服务"]
+            CredMgr["🔑 凭证管理器"]
+        end
+
+        subgraph "ScanExecution[扫描执行]"
+            LogScanner["📄 日志扫描器"]
+            SecretScanner["🔍 敏感信息扫描器"]
+            ResultParser["📊 结果解析器"]
+        end
+
+        subgraph "ProcessingOutput[处理与输出]"
+            ReportGen["📋 报告生成器"]
+            Encryptor["🔒 加密器"]
+            Signer["✍️ 签名器"]
+            Uploader["⬆️ 上传器"]
+        end
+
+        subgraph "K8sResources[Kubernetes资源]"
+            Secret["🔐 Secret<br/>凭证"]
+            ConfigMap["⚙️ ConfigMap<br/>配置"]
+        end
+    end
+
+    subgraph "TrustBound2[信任边界2: 外部OBS存储]"
+        OBSLogs["📦 OBS日志桶<br/>输入数据源"]
+        OBSResults["📦 OBS结果桶<br/>输出存储"]
+        AuditLogs["📋 审计日志<br/>日志存储"]
+    end
+
+    %% 数据流链路
+    CronJob -->|触发| Orchestrator
+    Secret -->|读取凭证| CredMgr
+    ConfigMap -->|读取配置| Orchestrator
+
+    Orchestrator -->|协调| LogScanner
+    Orchestrator -->|协调| SecretScanner
+
+    OBSLogs -->|日志文件| LogScanner
+    LogScanner -->|扫描结果| SecretScanner
+    SecretScanner -->|检测结果| ResultParser
+    ResultParser -->|解析数据| ReportGen
+
+    ReportGen -->|报告JSON| Encryptor
+    Encryptor -->|加密数据| Signer
+    Signer -->|签名数据| Uploader
+    Uploader -->|加密报告| OBSResults
+
+    Orchestrator -->|审计记录| AuditLogs
+```
+
+**数据流说明：**
+
+**信任边界1 (Kubernetes集群 - 受信任执行环境)：**
+- 所有扫描逻辑和数据处理都在容器内执行
+- 完整的处理流水线：读凭证 → 编排 → 扫描 → 加密 → 上传
+
+**信任边界2 (外部OBS存储 - 不完全受信任)：**
+- OBS日志桶：输入数据源（NFS/S3挂载的日志文件）
+- OBS结果桶：加密报告输出存储
+
+**关键数据流（跨越信任边界的高风险点）：**
+
+| 序号 | 数据流 | 来源 → 目标 | 内容 | 风险 | 缓解措施 |
+|------|--------|-----------|------|------|---------|
+| 1️⃣ | 日志读取 | OBSLogs → LogScanner | 原始日志文件 | 网络嗅探、篡改 | TLS 1.3、IAM权限 |
+| 2️⃣ | 报告上传 | Uploader → OBSResults | AES-256加密+签名 | 中间人攻击、泄露 | HMAC验证、Object Lock |
+| 3️⃣ | 凭证读取 | Secret → CredMgr | OBS访问凭证 | 凭证泄露 | 启动后立即删除 |
+| 4️⃣ | 审计记录 | Orchestrator → AuditLogs | 脱敏操作日志 | 日志篡改 | Object Lock保护 |
+
+---
+
+**威胁分析详情** (STRIDE方法，16个威胁)：
+
+基于4个关键数据流跨越信任边界的风险识别。
+
+| 威胁ID | 威胁名称 | STRIDE类别 | 风险等级 | 关联数据流 | 风险场景 | 缓解措施 |
+|--------|---------|-----------|---------|----------|---------|---------|
+| S-001 | 伪造扫描任务身份 | Spoofing | 🔴 高 | CronJob触发 | 定时任务被篡改，执行恶意扫描 | Kubernetes RBAC + 不可变CronJob |
+| S-002 | 伪造OBS凭证 | Spoofing | 🔴 高 | 凭证读取(Secret) | Secret中的凭证被复制冒用 | Secret加密 + 凭证启动后删除 |
+| T-001 | 篡改扫描结果 | Tampering | 🔴 高 | 报告上传(Uploader→OBSResults) | 加密报告在OBS中被篡改 | HMAC签名 + Object Lock |
+| T-002 | 篡改配置文件 | Tampering | 🟠 中 | 配置读取(ConfigMap) | ConfigMap被修改导致扫描范围变更 | RBAC + 不可变ConfigMap |
+| T-003 | 篡改审计日志 | Tampering | 🔴 高 | 审计记录(Orchestrator→AuditLogs) | 审计日志被删除或修改掩盖痕迹 | Object Lock + 不可删除属性 |
+| R-001 | 否认扫描操作 | Repudiation | 🟠 中 | 审计记录 | 无法证明扫描任务是否执行过 | Kubernetes审计日志 + 脱敏记录 |
+| I-001 | 凭证泄露 | Information | 🔴 高 | 凭证读取(Secret→CredMgr) | OBS凭证在传输或内存中泄露 | 启动后立即删除 + 内存加密 |
+| I-002 | 扫描结果泄露 | Information | 🔴 高 | 报告上传(Uploader→OBSResults) | 加密报告在网络传输中被窃取 | AES-256加密 + TLS 1.3 |
+| I-003 | 日志内容泄露 | Information | 🔴 高 | 日志读取(OBSLogs→LogScanner) | 原始日志文件在传输中被窃听 | IAM策略 + 日志桶加密 |
+| I-004 | 审计日志泄露 | Information | 🟠 中 | 审计记录(Orchestrator→AuditLogs) | 审计日志被未授权访问 | 访问控制 + 日志加密 |
+| D-001 | 资源耗尽 | Denial | 🟠 中 | Orchestrator协调 | 恶意配置导致扫描过度消耗资源 | 并发限制 + 超时机制 |
+| D-002 | 日志存储耗尽 | Denial | 🟠 中 | 日志读取(OBSLogs) | OBS日志桶被填满导致无法读取 | 容量限制 + 监控告警 |
+| D-003 | 扫描任务阻塞 | Denial | 🟠 中 | LogScanner执行 | 恶意日志文件导致扫描阻塞 | 超时机制 + 自动重试 |
+| E-001 | 容器逃逸 | Elevation | 🔴 高 | 容器执行过程 | 容器漏洞被利用逃逸获取宿主机权限 | Pod安全策略 + 只读文件系统 |
+| E-002 | RBAC权限提升 | Elevation | 🔴 高 | Orchestrator协调 | 通过RBAC权限链实现权限提升 | 最小权限原则 + 定期审计 |
+| E-003 | Secret访问提升 | Elevation | 🔴 高 | 凭证读取(Secret) | 通过ServiceAccount权限链访问Secret | RBAC细粒度 + 外部密钥管理 |
+
+**威胁汇总**：
+- **总威胁数**: 16个（STRIDE全覆盖）
+- **高风险(P1)**: 10个
+- **中风险(P2)**: 6个
 
 ### 3.1.2 安全设计实现 (Security Mechanisms)
 
@@ -590,132 +694,6 @@ graph TB
 ### 3.1.4 OWASP威胁建模分析
 
 > **说明**：使用OWASP Threat Dragon方法论进行全面的威胁分析，采用STRIDE威胁分类模型和数据流图（DFD）方法。
-
----
-
-#### 1. DFD数据流图 - 系统架构与威胁建模
-
-系统级的数据流图，包括外部实体、处理实体、存储实体、数据流和信任边界。
-
-```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#2196f3',
-    'primaryBorderColor': '#1565c0',
-    'primaryTextColor': '#ffffff',
-    'fontSize': '14px'
-  }
-}}%%
-graph TB
-    subgraph "External[外部交互者 (不信任)]"
-        Attacker["🔴 攻击者<br/>恶意请求"]
-        Ops["👤 运维人员<br/>配置管理"]
-    end
-
-    subgraph "TrustBound1[信任边界1: Kubernetes集群 (受信任的执行环境)]"
-        subgraph "K8sResources[Kubernetes资源]"
-            CronJob["⏰ CronJob<br/>定时任务触发"]
-            Secret["🔐 Secret<br/>加密存储凭证"]
-            ConfigMap["⚙️ ConfigMap<br/>扫描配置"]
-        end
-
-        subgraph "ScanProcesses[扫描执行过程 - 容器内运行]"
-            Orchestrator["🎯 扫描编排服务<br/>协调生命周期"]
-            CredMgr["🔑 凭证管理器<br/>读取凭证<br/>读完立即删除"]
-            LogScanner["📄 日志扫描器<br/>扫描最近3天<br/>日志文件"]
-            SecretScanner["🔍 敏感信息扫描器<br/>gitleaks检测"]
-            ResultParser["📊 结果解析器<br/>提取namespace/pod"]
-            ReportGen["📋 报告生成器<br/>结构化报告"]
-            Encryptor["🔒 加密器<br/>AES-256加密"]
-            Signer["✍️ 签名器<br/>HMAC-SHA256"]
-            Uploader["⬆️ 结果上传器<br/>上传到OBS<br/>在容器内执行"]
-        end
-    end
-
-    subgraph "TrustBound2[信任边界2: 外部OBS存储 (不完全受信任)]"
-        OBSLogs["📦 OBS日志桶<br/>NFS/S3挂载<br/>多云日志"]
-        OBSResults["📦 OBS结果桶<br/>加密报告存储<br/>访问控制"]
-        AuditLogs["📋 审计日志<br/>脱敏记录<br/>Object Lock"]
-    end
-
-    %% 内部交互
-    CronJob -->|触发扫描| Orchestrator
-    Secret -->|读取凭证| CredMgr
-    ConfigMap -->|读取配置| Orchestrator
-    Orchestrator -->|协调| CredMgr
-    Orchestrator -->|协调| LogScanner
-    LogScanner -->|扫描结果| SecretScanner
-    SecretScanner -->|检测结果| ResultParser
-    ResultParser -->|解析数据| ReportGen
-    ReportGen -->|报告JSON| Encryptor
-    Encryptor -->|加密数据| Signer
-    Signer -->|签名数据| Uploader
-    Orchestrator -->|审计记录| AuditLogs
-
-    %% 跨越边界的数据流（关键风险点）
-    LogScanner -->|日志数据| OBSLogs
-    OBSLogs -->|日志文件| LogScanner
-    Uploader -->|加密报告+签名| OBSResults
-
-    %% 外部交互（威胁向量）
-    Ops -->|配置变更| ConfigMap
-    Ops -->|查看报告| OBSResults
-    Attacker -.->|试图注入恶意任务| CronJob
-    Attacker -.->|窃听通信| LogScanner
-    Attacker -.->|访问OBS凭证| Secret
-    Attacker -.->|篡改OBS数据| OBSResults
-```
-
-**信任边界说明：**
-
-| 边界 | 范围 | 特性 | 威胁向量 |
-|------|------|------|---------|
-| **信任边界1** | Kubernetes集群内部 | 受信任执行环境<br/>Kubernetes RBAC保护<br/>网络隔离<br/>**包含：所有扫描过程和上传器** | 内部提权、配置篡改 |
-| **信任边界2** | 外部OBS存储 | 网络通信<br/>数据存储<br/>不完全受控 | 网络嗅探、数据篡改、凭证泄露 |
-| **外部交互者** | 运维人员、攻击者 | 不信任<br/>恶意或误操作 | 注入恶意任务、配置篡改、数据访问 |
-
-**关键跨越信任边界的数据流（高风险）：**
-
-1. **日志数据流** (LogScanner ↔ OBSLogs)
-   - 风险：网络嗅探、日志修改
-   - 缓解：TLS 1.3加密、IAM访问控制
-
-2. **加密报告上传** (Uploader → OBSResults) ⭐ **关键跨越点**
-   - 风险：中间人攻击、报告泄露、上传过程中的凭证暴露
-   - 缓解：HMAC签名验证、AES-256加密、TLS 1.3、Object Lock
-   - 说明：上传器在容器内执行，OBS凭证通过内存中的凭证完成认证
-
-3. **凭证传输** (Secret → CredMgr) ⭐ **关键跨越点**
-   - 风险：凭证泄露、密钥劫持
-   - 缓解：启动后立即删除、内存加密、Secret挂载为只读
-
-4. **运维配置变更** (Ops → ConfigMap) ⭐ **信任边界入口点**
-   - 风险：恶意配置注入、权限提升
-   - 缓解：RBAC权限控制、不可变ConfigMap、审计日志
-
----
-
-**威胁分析详情** (STRIDE方法，16个威胁)：
-
-| 威胁ID | 威胁名称 | STRIDE类别 | 风险等级 | 威胁目标 | 攻击场景 | 缓解措施 |
-|--------|---------|-----------|---------|---------|---------|---------|
-| S-001 | 伪造扫描任务身份 | Spoofing | 🔴 高 | 扫描编排服务 | 攻击者伪造CronJob注入恶意任务 | RBAC + ServiceAccount验证 |
-| S-002 | 伪造OBS凭证 | Spoofing | 🔴 高 | K8s Secrets | 攻击者盗取凭证后冒用 | Secret加密 + 配置启动后删除 |
-| T-001 | 篡改扫描结果 | Tampering | 🔴 高 | OBS结果桶 | 篡改报告隐藏敏感发现 | AES-256加密 + HMAC签名 |
-| T-002 | 篡改配置文件 | Tampering | 🟠 中 | ConfigMap | 修改扫描参数改变范围 | RBAC + 不可变ConfigMap |
-| T-003 | 篡改审计日志 | Tampering | 🔴 高 | 审计日志 | 删除日志掩盖痕迹 | Object Lock + 不可删除属性 |
-| R-001 | 否认扫描操作 | Repudiation | 🟠 中 | 扫描编排服务 | 否认执行过扫描或修改 | K8s审计日志 + 脱敏记录 |
-| I-001 | 凭证泄露 | Information | 🔴 高 | K8s Secrets | 从日志或内存获取凭证 | 配置启动后删除 + 内存加密 |
-| I-002 | 扫描结果泄露 | Information | 🔴 高 | OBS结果桶 | 访问报告获取敏感位置信息 | AES-256加密 + TLS 1.3 |
-| I-003 | 日志内容泄露 | Information | 🔴 高 | OBS日志桶 | 直接访问原始敏感日志 | IAM策略 + OBS桶加密 |
-| I-004 | 审计日志泄露 | Information | 🟠 中 | 审计日志 | 读取脱敏日志推断行为 | 访问控制 + 日志加密 |
-| D-001 | 资源耗尽 | Denial | 🟠 中 | 扫描编排服务 | 提交大量任务消耗资源 | 并发限制 + 超时机制 |
-| D-002 | 日志存储耗尽 | Denial | 🟠 中 | OBS日志桶 | 填充OBS导致存储溢出 | 容量限制 + 监控告警 |
-| D-003 | 扫描任务阻塞 | Denial | 🟠 中 | 扫描编排服务 | 注入恶意日志导致阻塞 | 超时机制 + 自动重试 |
-| E-001 | 容器逃逸 | Elevation | 🔴 高 | 扫描容器 | 利用容器漏洞逃逸 | Pod安全策略 + 只读文件系统 |
-| E-002 | RBAC权限提升 | Elevation | 🔴 高 | 扫描编排服务 | 通过RBAC链提升权限 | 最小权限原则 + 定期审计 |
-| E-003 | Secret访问提升 | Elevation | 🔴 高 | K8s Secrets | 通过ServiceAccount权限链提升 | RBAC细粒度控制 + 外部密钥管理 |
 
 ---
 
