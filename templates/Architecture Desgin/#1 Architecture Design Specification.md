@@ -16,18 +16,91 @@
 
 ### 2.1 架构图
 
-> 此处建议插入架构拓扑系统组件图或时序图,描述组件间的交互关系。建议使用mermaid实现，可代码化，GitHub可渲染。
+> 此处建议插入架构拓扑系统组件图或时序图，描述组件间的交互关系。推荐使用Mermaid实现，可代码化，GitHub可渲染。
 > **不涉及需要说明原因**
 
 **设计说明/归档：** **[TODO]**
+
+**架构图示例（使用Mermaid）：**
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#9c27b0',
+    'primaryBorderColor': '#6a1b9a',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
+graph TB
+    subgraph "前端层"
+        UI["🖥️ Web UI"]
+    end
+    subgraph "应用层"
+        API["🔌 API Server"]
+        Service["⚙️ 业务服务"]
+    end
+    subgraph "数据层"
+        DB["💾 数据库"]
+        Cache["⚡ 缓存"]
+    end
+    UI -->|HTTP/HTTPS| API
+    API --> Service
+    Service --> DB
+    Service --> Cache
+```
+
+**说明：**
+- 推荐使用Graph展示系统组件和依赖关系
+- 使用subgraph分组相关组件
+- 使用emoji增强可读性
+- 标注通信协议和数据流向
 
 ### 2.2 数据流图
 
-> 此处建议插入数据流图，描述核心业务数据的生命周期，即威胁建模。
-> 建议使用建议使用mermaid实现，可代码化，GitHub可渲染。
+> 此处建议插入数据流图，描述核心业务数据的生命周期，即威胁建模的基础。推荐使用Mermaid实现，可代码化，GitHub可渲染。
 > **不涉及需要说明原因**
 
 **设计说明/归档：** **[TODO]**
+
+**数据流图示例（使用Mermaid）：**
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#f44336',
+    'primaryBorderColor': '#c62828',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
+graph LR
+    subgraph "数据源"
+        Source["📥 外部数据源"]
+    end
+    subgraph "处理"
+        Process["⚙️ 数据处理"]
+        Validate["✓ 数据验证"]
+    end
+    subgraph "存储"
+        Store["💾 持久化存储"]
+    end
+    subgraph "输出"
+        Output["📤 数据输出"]
+    end
+    Source -->|原始数据| Process
+    Process --> Validate
+    Validate -->|验证通过| Store
+    Store -->|查询| Output
+```
+
+**说明：**
+- 推荐使用DFD展示数据流向和处理步骤
+- 标注数据在各阶段的转换和处理
+- 识别数据的来源、处理、存储和输出
+- 为威胁建模和安全设计提供基础
 
 ### 2.3 组件职责与接口
 
@@ -76,10 +149,45 @@ _如：_
 
 ### 3.1.1 威胁分析 (Threat Modeling)
 
-> 基于 **STRIDE** 或类似模型，识别本项目可能面临的安全威胁。可直接复制threatdragon威胁分析报告
+> 基于 **STRIDE** 或类似模型，识别本项目可能面临的安全威胁。推荐使用Mermaid绘制DFD数据流图和信任边界，展示系统的安全边界和数据流向。
 > **建议归档服务模块设计图，后续需要可增量复用（导入设计文件到工具中即可复用增量设计）。**
 
 **设计说明/归档：** **[TODO]**
+
+**威胁建模图示例（使用Mermaid DFD）：**
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#e91e63',
+    'primaryBorderColor': '#c2185b',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
+graph TB
+    subgraph "信任边界1: 内部系统"
+        Input["📥 输入处理"]
+        Process["⚙️ 业务处理"]
+        Output["📤 输出处理"]
+    end
+    subgraph "信任边界2: 外部存储"
+        Storage["💾 外部存储"]
+    end
+    Input --> Process
+    Process --> Output
+    Output -->|加密传输| Storage
+    Storage -->|查询| Process
+```
+
+**说明：**
+- 使用subgraph标注信任边界
+- 标注跨越信任边界的数据流
+- 识别高风险的数据流向
+- 为STRIDE威胁分析提供基础
+
+**威胁分析表：**
 
 _如：_
 
@@ -89,8 +197,9 @@ _如：_
 | **篡改/伪造** | **[TODO]** _如：伪造回调请求非法提升社区权限_         | 高       | 引入请求签名校验与 Hmac 验证       |
 | **隐私泄露**  | **[TODO]** _如：日志中打印了明文Token_          | 中       | 实现日志脱敏过滤器 (Log Masking) |
 
-![img.png](威胁分析报告1.png)
-![img.png](威胁分析报告2.png)
+**参考资料：**
+- 详见《架构设计说明书编写经验》第8章：威胁建模中的信任边界设计
+- 详见《架构设计说明书编写经验》第16-20章：Mermaid图表应用指南
 
 ### 3.1.2 安全设计实现 (Security Mechanisms)
 
