@@ -21,46 +21,25 @@
 
 本需求在现有 manage 服务分层架构中新增一条调用链路，不改变任何拓扑结构。新增内容用 `[NEW]` 标注，复用内容用 `[REUSE]` 标注：
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     cve-sa-backend (manage)                     │
-│                                                                 │
-│  routers/manage/router.go                                       │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  POST /releaseMultiArch  [NEW]                           │   │
-│  │  ── managerAuth + managerLimit 中间件 [REUSE] ──          │   │
-│  └────────────────────┬─────────────────────────────────────┘   │
-│                       │                                         │
-│  controllers/manage/  │                                         │
-│  ┌────────────────────▼─────────────────────────────────────┐   │
-│  │  ReleaseMultiArch()  [REUSE] 参数解析 → ArchParam{        │   │
-│  │                               Arch: split[2], ...}       │   │
-│  └────────────────────┬─────────────────────────────────────┘   │
-│                       │  调用相同的 handle 函数                  │
-│  handles/manage/      │                                         │
-│  ┌────────────────────▼─────────────────────────────────────┐   │
-│  │          ReleaseMultiArch(param ArchParam)  [REUSE]      │   │
-│  │                                                          │   │
-│  │  getRpms()          → CSV 下载 + 解析 RPM 包列表          │   │
-│  │  checkWhetherReleased() → 幂等检查                        │   │
-│  │  DownloadFile()     → OBS 下载 CVRF XML                  │   │
-│  │  updateCvrfWithNewArch() → 追加 riscv64 Branch           │   │
-│  │  UploadFile()       → OBS 覆盖上传                        │   │
-│  │  SyncSA()           → 公告重新发布                        │   │
-│  │  uploadUpdateFixed() → 更新 update-fixed 文件             │   │
-│  └────────────────────┬─────────────────────────────────────┘   │
-│                       │                                         │
-│  ┌────────────────────▼─────────────────────────────────────┐   │
-│  │  dao层 [REUSE]                                           │   │
-│  │  DefaultSecurityNotice.NoticeForMultiArch()              │   │
-│  │  DefaultReleaseMultiArch.Find() / Create()               │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph backend["cve-sa-backend (manage)"]
+        Router["routers/manage/router.go\nPOST /releaseMultiArch [NEW]\nmanagerAuth + managerLimit 中间件 [REUSE]"]
+        Controller["controllers/manage/\nReleaseMultiArch() [REUSE]\n参数解析 → ArchParam{Arch: split[2], ...}"]
+        Handle["handles/manage/\nReleaseMultiArch(param ArchParam) [REUSE]\ngetRpms() → CSV 下载 + 解析 RPM 包列表\ncheckWhetherReleased() → 幂等检查\nDownloadFile() → OBS 下载 CVRF XML\nupdateCvrfWithNewArch() → 追加 riscv64 Branch\nUploadFile() → OBS 覆盖上传\nSyncSA() → 公告重新发布\nuploadUpdateFixed() → 更新 update-fixed 文件"]
+        DAO["dao层 [REUSE]\nDefaultSecurityNotice.NoticeForMultiArch()\nDefaultReleaseMultiArch.Find() / Create()"]
+    end
 
-外部依赖（均为现有依赖，无新增）：
-  dailybuild 站点  →  CSV 文件（riscv64 RPM 包列表）
-  OBS（对象存储）  →  CVRF XML 文件读写
-  MySQL 数据库    →  cve_security_notice / cve_release_multi_arch 表
+    Dailybuild[("dailybuild 站点\nCSV 文件（riscv64 RPM 包列表）")]
+    OBS[("OBS（对象存储）\nCVRF XML 文件读写")]
+    MySQL[("MySQL 数据库\ncve_security_notice\ncve_release_multi_arch 表")]
+
+    Router -->|"HTTP 请求路由"| Controller
+    Controller -->|"调用相同的 handle 函数"| Handle
+    Handle --> DAO
+    Handle -->|"下载 CSV"| Dailybuild
+    Handle -->|"读写 CVRF XML"| OBS
+    DAO -->|"查询 / 写入"| MySQL
 ```
 
 ### 2.2 数据流图
@@ -69,80 +48,54 @@
 
 以下描述调用 `POST /releaseMultiArch` 后 `ReleaseMultiArch` 的完整执行流，标注关键函数与数据结构：
 
-```
-运维人员
-   │  POST /releaseMultiArch
-   │  dir=openEuler_24.03_riscv64 & date=... & version=openEuler-24.03-LTS
-   ▼
-releaseMultiArch() [controller]
-   版本/日期/dir 非空，dir 按"_"拆分 → split[2]="riscv64"
-   构造 ArchParam{Dir, Arch:"riscv64", Date:[]string, Version}
-   │
-   ▼
-releaseMultiArch(param ArchParam) [handle]
-   │
-   ├─[Step1] getRpms(param)
-   │   ArchParam.CsvOfPackagesUrl()
-   │     → "https://dailybuild.../openEuler-24.03-LTS/openEuler_24.03_riscv64/openEuler-24.03-LTS-riscv64.csv"
-   │   ArchParam.CsvOfEpolPackagesUrl()
-   │     → "https://dailybuild.../EPOL/openEuler_24.03_riscv64/openEuler-24.03-LTS-riscv64.csv"
-   │   parseCsv() → map[组件名][]rpm{Name, IsEpol}
-   │   若 map 为空 → 返回 error，终止
-   │
-   ├─[Step2] dao.DefaultSecurityNotice.NoticeForMultiArch(version, components, dates)
-   │   查询 cve_security_notice 表
-   │   → []CveSecurityNotice
-   │
-   └─[Step3] 逐条公告循环处理：
-       │
-       ├─ ContainsProduct(version) 精确过滤（防模糊查询误匹配）
-       │
-       ├─ checkWhetherReleased(noticeNo, param)
-       │   dao.DefaultReleaseMultiArch.Find(
-       │     {Arch:"riscv64", SecurityNoticeNo, AffectedProduct}
-       │   )
-       │   已存在记录 → 跳过（幂等）
-       │
-       ├─ localutils.DownloadFile(n.PathOfObs())
-       │   OBS 路径: "{DownloadCvrf}{year}/cvrf-{noticeNo}.xml"
-       │   → []byte（XML 内容）
-       │
-       ├─ xml.Unmarshal → Cvrf 结构体
-       │   Cvrf.ProductTree.OpenEulerBranch[]
-       │     Branch{Type:"Package Arch", Name:"aarch64/x86_64", FullProductName[]}
-       │
-       ├─ updateCvrfWithNewArch(&cvrf, param, packages)
-       │   generateFullProductName(version, rpms)
-       │     cpe = "cpe:/a:openEuler:openEuler:24.03-LTS"
-       │     FullProductName{ProductId, Cpe, IsEpol, FullProductName(rpm包名)}
-       │   若已存在 Name="riscv64" Branch → append FullProductName
-       │   否则 → 新建 OpenEulerBranch{Type:"Package Arch", Name:"riscv64"}
-       │
-       ├─ cvrfToXml(&cvrf)
-       │   setNamespaceOfXml()  ← 手动补全 XML 命名空间属性
-       │   xml.MarshalIndent → []byte
-       │
-       ├─ localutils.UploadFile(obsPath, bytes.NewReader(updatedXml))
-       │   覆盖写回 OBS 原路径
-       │
-       ├─ SyncSA(n.PathToSyncSA())
-       │   解析 CVRF → 数据库事务：
-       │     DeleteSecurityByNo + CreateSecurity
-       │     DeletePackagesByNo + CreatePackage
-       │     DeleteReferencesByNo + CreateReference
-       │
-       └─ dao.DefaultReleaseMultiArch.Create(CveReleaseMultiArch{
-             Arch:             "riscv64",
-             AffectedComponent: n.AffectedComponent,
-             AffectedProduct:   param.Version,
-             SecurityNoticeNo:  n.SecurityNoticeNo,
-           })
+```mermaid
+flowchart TD
+    Operator([运维人员]) -->|"POST /releaseMultiArch\ndir=openEuler_24.03_riscv64\ndate=... & version=openEuler-24.03-LTS"| Controller
 
-   uploadUpdateFixed(updatedFilename)
-     将本次发布的文件列表写入 OBS update-fixed 文件
-   │
-   ▼
-返回 []string（成功发布的 CVRF 相对路径列表）
+    Controller["controller: releaseMultiArch()\n版本/日期/dir 非空\ndir 按'_'拆分 → split[2]='riscv64'\n构造 ArchParam{Dir, Arch:'riscv64', Date, Version}"]
+    Controller --> Step1
+
+    Step1["Step1: getRpms(param)\nArchParam.CsvOfPackagesUrl() → 主仓 CSV URL\nArchParam.CsvOfEpolPackagesUrl() → EPOL CSV URL\nparseCsv() → map[组件名][]rpm{Name, IsEpol}"]
+    Step1 -->|"map 为空"| ErrEnd([返回 error，终止])
+    Step1 -->|"map 非空"| Step2
+
+    Step2["Step2: dao.DefaultSecurityNotice.NoticeForMultiArch(version, components, dates)\n查询 cve_security_notice 表 → []CveSecurityNotice"]
+    Step2 --> LoopCheck
+
+    LoopCheck{逐条公告循环}
+    LoopCheck -->|"ContainsProduct(version) 精确过滤"| CheckReleased
+    LoopCheck -->|"全部处理完毕"| UploadFixed
+
+    CheckReleased["checkWhetherReleased(noticeNo, param)\ndao.DefaultReleaseMultiArch.Find(Arch, SecurityNoticeNo, AffectedProduct)"]
+    CheckReleased -->|"已存在记录，幂等跳过"| LoopCheck
+    CheckReleased -->|"不存在记录"| Download
+
+    Download["localutils.DownloadFile(n.PathOfObs())\nOBS 路径: DownloadCvrf{year}/cvrf-{noticeNo}.xml → []byte"]
+    Download -->|"失败: multiArchLog + continue"| LoopCheck
+    Download -->|"成功"| ParseXML
+
+    ParseXML["xml.Unmarshal → Cvrf 结构体\nCvrf.ProductTree.OpenEulerBranch[]"]
+    ParseXML --> UpdateCVRF
+
+    UpdateCVRF["updateCvrfWithNewArch(&cvrf, param, packages)\ngenerateFullProductName(version, rpms)\n  cpe = 'cpe:/a:openEuler:openEuler:24.03-LTS'\n  FullProductName{ProductId, Cpe, IsEpol, rpm包名}\n已存在 Name='riscv64' Branch → append FullProductName\n否则 → 新建 OpenEulerBranch{Type:'Package Arch', Name:'riscv64'}"]
+    UpdateCVRF --> MarshalXML
+
+    MarshalXML["cvrfToXml(&cvrf)\nsetNamespaceOfXml() 手动补全 XML 命名空间属性\nxml.MarshalIndent → []byte"]
+    MarshalXML --> UploadFile
+
+    UploadFile["localutils.UploadFile(obsPath, bytes.NewReader(updatedXml))\n覆盖写回 OBS 原路径"]
+    UploadFile -->|"失败: multiArchLog + continue"| LoopCheck
+    UploadFile -->|"成功"| SyncSA
+
+    SyncSA["SyncSA(n.PathToSyncSA())\n解析 CVRF → 数据库事务:\nDeleteSecurityByNo + CreateSecurity\nDeletePackagesByNo + CreatePackage\nDeleteReferencesByNo + CreateReference"]
+    SyncSA -->|"失败: multiArchLog + continue"| LoopCheck
+    SyncSA -->|"成功"| WriteRecord
+
+    WriteRecord["dao.DefaultReleaseMultiArch.Create(CveReleaseMultiArch)\nArch='riscv64'\nAffectedComponent / AffectedProduct\nSecurityNoticeNo"]
+    WriteRecord --> LoopCheck
+
+    UploadFixed["uploadUpdateFixed(updatedFilename)\n将本次发布的文件列表写入 OBS update-fixed 文件"]
+    UploadFixed --> Response([返回 []string 成功发布的 CVRF 相对路径列表])
 ```
 
 ### 2.3 组件职责与接口
