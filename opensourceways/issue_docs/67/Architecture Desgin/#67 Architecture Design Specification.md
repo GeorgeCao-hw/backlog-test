@@ -555,69 +555,114 @@ graph TB
    - 配置文件权限设置为 `600`（仅所有者可读）
 
 2. **启动时加载**：
-   ```python
-   import os
-   import json
-   from pathlib import Path
+   ```go
+   package main
 
-   def load_credentials():
-       """从配置文件加载凭证"""
-       cred_file = Path('/tmp/credentials/obs-credentials.json')
+   import (
+       "encoding/json"
+       "fmt"
+       "os"
+       "path/filepath"
+   )
 
-       if not cred_file.exists():
-           raise ValueError('Credentials file not found')
+   type Credentials struct {
+       AccessKey string `json:"access_key"`
+       SecretKey string `json:"secret_key"`
+       Endpoint  string `json:"endpoint"`
+   }
 
-       # 读取凭证
-       with open(cred_file, 'r') as f:
-           creds = json.load(f)
+   func loadCredentials() (*Credentials, error) {
+       credFile := filepath.Join("/tmp/credentials", "obs-credentials.json")
 
-       # 验证凭证格式
-       required_keys = ['access_key', 'secret_key', 'endpoint']
-       if not all(k in creds for k in required_keys):
-           raise ValueError('Invalid credentials format')
+       data, err := os.ReadFile(credFile)
+       if err != nil {
+           return nil, fmt.Errorf("credentials file not found: %w", err)
+       }
 
-       return creds
+       var creds Credentials
+       if err := json.Unmarshal(data, &creds); err != nil {
+           return nil, fmt.Errorf("invalid credentials format: %w", err)
+       }
 
-   # 应用启动时加载
-   CREDENTIALS = load_credentials()
+       if creds.AccessKey == "" || creds.SecretKey == "" || creds.Endpoint == "" {
+           return nil, fmt.Errorf("missing required credential fields")
+       }
+
+       return &creds, nil
+   }
+
+   func main() {
+       creds, err := loadCredentials()
+       if err != nil {
+           panic(err)
+       }
+       _ = creds // 使用凭证
+   }
    ```
 
 3. **启动后清理**：
-   - 应用启动成功后，立即删除配置文件
-   - 应用启动失败时，也删除配置文件（防止泄露）
-   - 使用安全删除方式（覆写后删除）
+   ```go
+   package main
 
-   ```python
-   import os
-   import shutil
-   from pathlib import Path
+   import (
+       "crypto/rand"
+       "fmt"
+       "os"
+       "path/filepath"
+   )
 
-   def cleanup_credentials():
-       """安全删除凭证配置文件"""
-       cred_file = Path('/tmp/credentials/obs-credentials.json')
+   func cleanupCredentials() error {
+       credFile := filepath.Join("/tmp/credentials", "obs-credentials.json")
 
-       if cred_file.exists():
-           try:
-               # 方式1：覆写后删除（更安全）
-               with open(cred_file, 'wb') as f:
-                   f.write(os.urandom(cred_file.stat().st_size))
-               cred_file.unlink()
+       fileInfo, err := os.Stat(credFile)
+       if err != nil {
+           if os.IsNotExist(err) {
+               return nil // 文件不存在，无需清理
+           }
+           return err
+       }
 
-               # 方式2：直接删除（快速）
-               # cred_file.unlink()
+       // 方式1：覆写后删除（更安全）
+       file, err := os.OpenFile(credFile, os.O_WRONLY, 0600)
+       if err != nil {
+           return fmt.Errorf("failed to open credentials file: %w", err)
+       }
+       defer file.Close()
 
-               print(f"Credentials file cleaned: {cred_file}")
-           except Exception as e:
-               print(f"Warning: Failed to clean credentials: {e}")
+       // 用随机数据覆写
+       randomData := make([]byte, fileInfo.Size())
+       if _, err := rand.Read(randomData); err != nil {
+           return fmt.Errorf("failed to generate random data: %w", err)
+       }
 
-   # 应用启动成功后立即清理
-   try:
-       CREDENTIALS = load_credentials()
-       cleanup_credentials()  # 立即清理
-       # 继续应用逻辑
-   except Exception as e:
-       cleanup_credentials()  # 失败时也清理
-       raise
+       if _, err := file.Write(randomData); err != nil {
+           return fmt.Errorf("failed to overwrite credentials: %w", err)
+       }
+
+       // 删除文件
+       if err := os.Remove(credFile); err != nil {
+           return fmt.Errorf("failed to remove credentials file: %w", err)
+       }
+
+       fmt.Printf("Credentials file cleaned: %s\n", credFile)
+       return nil
+   }
+
+   func main() {
+       creds, err := loadCredentials()
+       if err != nil {
+           defer cleanupCredentials()
+           panic(err)
+       }
+
+       defer func() {
+           if err := cleanupCredentials(); err != nil {
+               fmt.Printf("Warning: Failed to clean credentials: %v\n", err)
+           }
+       }()
+
+       _ = creds // 继续应用逻辑
+   }
    ```
 
 4. **内存中的凭证管理**：
