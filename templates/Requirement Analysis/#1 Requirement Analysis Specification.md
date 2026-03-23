@@ -30,9 +30,36 @@
 
 ### 4.1 核心逻辑方案
 
-> 简述实现逻辑（如：数据流向、模块改动、新增配置项等），作为任务拆解的理论依据。图片文字形式不限。
+> 简述实现逻辑（如：数据流向、模块改动、新增配置项等），作为任务拆解的理论依据。推荐使用Mermaid图表展示流程，支持GitHub原生渲染。
 
 **逻辑方案:** **[TODO]** _如：通过 Sidecar 拦截流量，将访问日志异步推送至 OBS 存储。_
+
+**流程图示例（使用Mermaid）：**
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#4caf50',
+    'primaryBorderColor': '#2e7d32',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
+flowchart TD
+    A["用户请求"] --> B["Sidecar拦截"]
+    B --> C["日志收集"]
+    C --> D["异步推送"]
+    D --> E["OBS存储"]
+    F["应用处理"] -.->|并行| B
+```
+
+**说明：**
+- 推荐使用Flowchart展示业务流程
+- 推荐使用Sequence Diagram展示组件交互
+- 推荐使用State Diagram展示状态转移
+- 所有Mermaid代码直接嵌入Markdown，GitHub自动渲染
+- 参考《架构设计说明书编写经验》第16-20章获取更多图表示例
 
 ### 4.2 任务清单
 
