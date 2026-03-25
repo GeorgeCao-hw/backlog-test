@@ -124,6 +124,51 @@ classDiagram
 
 核心业务数据的处理流程（威胁建模参考点）：
 
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#e91e63',
+    'primaryBorderColor': '#c2185b',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
+graph TB
+    subgraph "GitCode Platform (不可信区域)"
+        Webhook["📥 Webhook Event (JSON)"]
+        RestAPI["🔌 GitCode REST API"]
+    end
+
+    subgraph "Robot Service (信任边界)"
+        direction TB
+        subgraph "输入处理"
+            Verify["🔐 签名校验 (HMAC-SHA256)"]
+            Parser["⚙️ 数据解析与脱敏"]
+        end
+        
+        subgraph "核心逻辑"
+            Rules["🧠 规则判定引擎"]
+            State["💾 Issue 状态快照"]
+        end
+        
+        subgraph "执行与存储"
+            DB[("💾 本地数据库 (Encrypted)")]
+            Logger["📝 审计日志"]
+        end
+    end
+
+    Webhook -->|HTTPS POST| Verify
+    Verify -->|校验通过| Parser
+    RestAPI -->|数据拉取| Parser
+    Parser --> Rules
+    Rules -->|读写状态| State
+    State -->|持久化| DB
+    Rules -->|行为记录| Logger
+    Rules -->|API 调用| RestAPI
+```
+
+**设计说明：**
 1. **输入阶段**: 
    - 外部事件输入（Webhook）带有签名校验。
    - 定时任务从 GitCode API 拉取 Issue 列表。
@@ -133,7 +178,7 @@ classDiagram
    - 机器人通过 API 执行写操作（评论、打标、关闭）。
    - 同步更新本地数据库中的状态快照。
 
-### 2.3 设计模式与逻辑抽象
+### 2.4 设计模式与逻辑抽象
 
 本系统在架构设计上采用了多种经典设计模式，以实现业务逻辑的解耦和高度可扩展性：
 
@@ -153,7 +198,7 @@ classDiagram
   - **逻辑设计**：对于全局共享的资源（如数据库连接池、全局配置中心），在设计上确保其在整个应用生命周期内仅存在一个全局访问点。
   - **优势**：保证了全局状态的一致性，并优化了系统资源的利用率。
 
-### 2.4 组件职责与接口
+### 2.5 组件职责与接口
 
 | 组件名称 | 主要职责 | 关键接口/方法 |
 | :--- | :--- | :--- |
@@ -163,24 +208,30 @@ classDiagram
 | **GitcodeClient** | GitCode API 通讯层 | `add_comment_to_issue()`, `update_issue_labels()` |
 | **DatabaseManager** | 数据库 ORM 管理 | `get_session()`, `update_issue_state()` |
 
-### 2.5 UX 设计
+### 2.6 UX 设计
 
 - **透明化反馈**: 机器人每次执行关键操作（如标记 `stale` 或关闭 Issue）都会在 Issue 下方发布详细的评论，告知用户原因及如何撤销该操作。
 - **用户指令支持**: 支持用户通过特定评论（如 `/label remove stale`）与机器人交互，覆盖机器人的自动判定，增加灵活性。
 
-### 2.6 SOD 设计
+### 2.7 SOD 设计
 
 - **权限最小化**: 机器人 Token 仅需具备操作 Issue 和 Merge Request 的权限，不赋予管理员或其他高危权限。
 - **审计追踪**: 所有机器人操作均记录在 `IssueState` 表中，并输出到标准日志流，支持追溯。
 
-### 2.7 功能设计分解 TASK 清单
+### 2.8 功能设计分解 TASK 清单
 
-| 任务 ID | 可服务性任务描述 | 责任人 |
-| :--- | :--- | :--- |
-| **TASK1** | 实现核心业务规则（Resolve, Stale, Auto-close） | 开发团队 |
-| **TASK2** | 封装 GitCode 客户端，支持多仓库操作 | 开发团队 |
-| **TASK3** | 编写 20% 以上的单元测试覆盖核心逻辑 | 开发团队 |
-| **TASK4** | 部署 Webhook 服务并完成内网穿透/域名映射 | 运维人员 |
+| 任务 ID | 架构设计细化任务描述 | 对应需求 Task | 责任人 |
+| :--- | :--- | :--- | :--- |
+| **TASK1.1** | 实现标题前缀自动识别与打标逻辑（含 [Feature], [Bug], [Doc] 正则匹配） | RA-TASK1 | 开发团队 |
+| **TASK1.2** | 开发 Issue 自动打标 API 逻辑 | RA-TASK1 | 开发团队 |
+| **TASK2.1** | 设计并实现 Issue `resolved` 到 `stale` 到 `closed` 的状态机流转逻辑 | RA-TASK2 | 开发团队 |
+| **TASK2.2** | 开发 Stale 状态下的自动回复提醒及用户互动自动取消 Stale 的恢复逻辑 | RA-TASK2 | 开发团队 |
+| **TASK3.1** | 封装 GitCode REST API 客户端（含 Token 鉴权、异常重试机制） | RA-TASK3 | 开发团队 |
+| **TASK3.2** | 定义 Issue 与 Comment 的 Pydantic 模型，实现数据层映射 | RA-TASK3 | 开发团队 |
+| **TASK4.1** | 实现 Webhook Server 基础架构（FastAPI）与 HMAC-SHA256 签名校验逻辑 | RA-TASK4 | 开发团队 |
+| **TASK4.2** | 完成 Webhook 服务在基础设施环境中的内网穿透与域名映射部署 | RA-TASK4 | 运维人员 |
+| **TASK5.1** | 编写单元测试框架并确保规则引擎（Rules Engine）的逻辑覆盖率达 100% | RA-TASK5 | 开发团队 |
+| **TASK5.2** | 完成端到端（E2E）模拟流程集成测试，验证 Issue 闭环流转 | RA-TASK5 | 开发团队 |
 
 ---
 
@@ -190,16 +241,43 @@ classDiagram
 
 #### 3.1.1 威胁分析 (Threat Modeling)
 
+```mermaid
+%%{init: { 
+   'theme': 'base', 
+   'themeVariables': { 
+     'primaryColor': '#e91e63', 
+     'primaryBorderColor': '#c2185b', 
+     'primaryTextColor': '#ffffff', 
+     'fontSize': '14px' 
+   } 
+ }}%% 
+ graph TB 
+     subgraph "信任边界1: Robot Service (内部系统)" 
+         Input["📥 输入处理 (Webhook/API)"] 
+         Process["⚙️ 业务处理 (Rules Engine)"] 
+         Output["📤 输出处理 (GitCode API)"] 
+     end 
+     subgraph "信任边界2: 外部存储" 
+         Storage["💾 数据库 (Encrypted)"] 
+         Log["📝 审计日志"]
+     end 
+     Input --> Process 
+     Process --> Output 
+     Output -->|加密传输| Storage 
+     Storage -->|查询| Process
+     Process --> Log
+```
+
 | 威胁类别 | 攻击场景描述 | 风险等级 | 对应减缓措施 |
 | :--- | :--- | :--- | :--- |
 | **篡改/伪造** | 伪造 Webhook 回调请求触发机器人异常操作 | 高 | 引入 Webhook Secret 校验 (HMAC-SHA256) |
-| **信息泄露** | 配置文件或日志中泄露 API Token | 高 | 使用环境变量注入配置，日志脱敏处理 |
+| **信息泄露** |  API Token | 高 | 使用配置文件读取token，启动后删除配置文件 |
 | **拒绝服务** | 恶意构造大量 Issue 评论触发 API 调用风暴 | 中 | 规则引擎引入执行频率限制和幂等性校验 |
 
 #### 3.1.2 安全设计实现
 
 - **身份认证**: 所有 API 调用必须携带合法的 `Private-Token`。
-- **凭证管理**: 严禁硬编码 Token，统一通过 `config.yaml` 或环境变量管理。
+- **凭证管理**: 严禁硬编码 Token，统一通过 `config.yaml` 读取。
 - **输入校验**: 对 Issue 标题前缀及评论指令进行正则强校验，防止注入攻击。
 
 ### 3.2 可靠性与韧性设计
