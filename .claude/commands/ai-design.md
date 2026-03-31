@@ -16,11 +16,13 @@
 
 ### 第一步：获取 Issue 信息
 1. 从参数中解析 `owner/repo` 和 `issueNumber`（纯数字默认为 `opensourceways/backlog`）
+   - 纯数字：识别为 `opensourceways/backlog` 仓库的 Issue
+   - URL格式：从 URL 中提取 `owner` 和 `repo`
 2. 使用 `gh issue view <issueNumber> --repo <owner/repo> --json title,body,labels,assignees,state,comments` 获取完整信息
 3. 解析 issueId、标题、需求背景、需求价值、需求详情、负责人等
 
 ### 第二步：判断当前阶段
-检查 `opensourceways/issue_docs/{issueId}/` 下已有文档，确定当前处于哪个阶段：
+检查 `opensourceways/{repo}/issue_docs/{issueId}/` 下已有文档，确定当前处于哪个阶段：
 
 | 检查项 | 阶段判断 |
 |--------|---------|
@@ -50,7 +52,7 @@
 
 **创建目录**：
 ```
-opensourceways/issue_docs/{issueId}/
+opensourceways/{repo}/issue_docs/{issueId}/
 ├── Requirement Analysis/
 │   └── #{issueId} Requirement Analysis Specification.md
 └── Docs/
@@ -75,7 +77,7 @@ opensourceways/issue_docs/{issueId}/
 
 **前置条件**：需求分析已完成，标签含 `need_security` 或 `need_design`
 
-**创建目录**：`opensourceways/issue_docs/{issueId}/Architecture Desgin/`
+**创建目录**：`opensourceways/{repo}/issue_docs/{issueId}/Architecture Desgin/`
 
 **写作内容**：
 1. 基础信息（需求链接、名称、责任人、设计目标）
@@ -91,7 +93,7 @@ opensourceways/issue_docs/{issueId}/
 
 **前置条件**：需求分析已完成，标签含 `need_itest`
 
-**创建目录**：`opensourceways/issue_docs/{issueId}/Test/`
+**创建目录**：`opensourceways/{repo}/issue_docs/{issueId}/Test/`
 
 **写作内容**：
 1. 复制模板为 `#{issueId} Test Strategy.md`
@@ -102,7 +104,7 @@ opensourceways/issue_docs/{issueId}/
 
 #### 阶段 D：变更计划说明书
 
-**创建目录**：`opensourceways/issue_docs/{issueId}/Release/`
+**创建目录**：`opensourceways/{repo}/issue_docs/{issueId}/Release/`
 
 **写作内容**：
 1. 复制模板为 `#{issueId} xx Change Plan Specification.md`
