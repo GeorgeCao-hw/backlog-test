@@ -4,7 +4,7 @@
 
 * **需求链接**: https://github.com/opensourceways/backlog/issues/114
 * **需求名称**: MinsdSpore-移除MindSpore用户名回调
-* **开发责任人**: **[TODO]** _githubid & gitcodeid_
+* **开发责任人**: Zherphy
 
 ---
 
