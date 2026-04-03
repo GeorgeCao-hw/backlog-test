@@ -7,7 +7,7 @@
 * **需求链接**: https://github.com/opensourceways/backlog/issues/62
 * **需求名称**: Description Agent (Issue/PR 描述合规性检查代理)
 * **开发责任人**: drizzlezyk
-* **设计目标**: 依托大语言模型 (LLM) 及其生态 (LangChain) 构建智能化合规审查代理。结合文本和图像识别能力，实时分析 Issue 和 PR 的标题与描述，判断其是否满足预定义的规范模板，并自动给出修正建议与打标管理。同时，确保所有输入输出通过安全审计。
+* **设计目标**: 依托大语言模型 (LLM) 及其生态 (LangChain) 构建智能化合规审查代理。实时分析 Issue 和 PR 的标题与描述，判断其是否满足预定义的规范模板，并自动给出修正建议与打标管理。同时，确保所有输入输出通过安全审计。
 
 ---
 
@@ -27,7 +27,6 @@ graph TD
     subgraph Robot Service
         Handler[Webhook Handler]
         Agent[Description Compliance Agent]
-        ImageExt[Log Image Extractor]
         Audit[Audit Client]
         Client[GitCode Client]
     end
@@ -39,12 +38,10 @@ graph TD
     Events -->|Issue/PR Created/Updated| Handler
     Handler -->|State & Whitelist Check| Agent
     Agent -->|1. Audit Title & Desc| Audit
-    Agent -->|2. Extract Images| ImageExt
-    ImageExt -->|Image Bytes / Vision API| LLMAPI
-    Agent -->|3. Assemble Prompt & Call| LLMAPI
+    Agent -->|2. Assemble Prompt & Call| LLMAPI
     LLMAPI -->|JSON Result| Agent
-    Agent -->|4. Audit LLM Output| Audit
-    Agent -->|5. Return Compliance Result| Handler
+    Agent -->|3. Audit LLM Output| Audit
+    Agent -->|4. Return Compliance Result| Handler
     Handler -->|Add/Remove Labels & Comments| Client
     Client -->|Execute| API
 ```
@@ -52,7 +49,6 @@ graph TD
 **设计说明：**
 - **Webhook Handler**: 拦截 Issue 和 PR 的 webhook 事件，执行前置过滤（仅处理 open 状态及配置了白名单的仓库）。
 - **Description Compliance Agent**: 核心代理类，编排规范加载、内容安全审核、大模型调用和结果解析。
-- **Log Image Extractor**: 如果描述中含有图像链接，负责下载图像并利用多模态 LLM 提取图像中的文本日志，作为分析的补充输入。
 - **Audit Client**: 对输入到大模型前的原始文本和 LLM 生成的输出文本进行敏感内容过滤。
 - **LLM Provider**: 外部的大语言模型服务，用于实际的语义理解与推理。
 
@@ -89,11 +85,6 @@ classDiagram
         -_build_checklist(spec_text) List~String~
     }
 
-    class LogImageExtractor {
-        -_llm: Any
-        +extract_from_urls(image_urls: List~String~) Dict
-    }
-
     class WebhookHandler {
         +desc_agent: DescriptionComplianceAgent
         -_process_issue_event(event)
@@ -103,7 +94,6 @@ classDiagram
 
     DescriptionComplianceAgent ..> TargetInfo : uses
     DescriptionComplianceAgent ..> ComplianceResult : produces
-    DescriptionComplianceAgent *-- LogImageExtractor : contains
     WebhookHandler o-- DescriptionComplianceAgent : utilizes
 ```
 
@@ -155,15 +145,14 @@ graph TB
 
 ### 2.4 设计模式与逻辑抽象
 
-- **代理模式 (Agent Pattern)**：将复杂的 LLM 交互、图像提取、数据审核封装在 `DescriptionComplianceAgent` 内，对外部调用方（WebhookHandler）只暴露一个简洁的 `evaluate(TargetInfo)` 接口。
-- **责任链模式 (Chain of Responsibility Pattern) 的思想应用**：在 `evaluate` 流程中，数据依次经过：输入审核 -> 图像解析 -> LLM 调用 -> JSON 解析过滤 -> 输出审核。任意一环失败（如审核不通过），流程立即终止并返回相应的错误信息或默认放行策略。
+- **代理模式 (Agent Pattern)**：将复杂的 LLM 交互、数据审核封装在 `DescriptionComplianceAgent` 内，对外部调用方（WebhookHandler）只暴露一个简洁的 `evaluate(TargetInfo)` 接口。
+- **责任链模式 (Chain of Responsibility Pattern) 的思想应用**：在 `evaluate` 流程中，数据依次经过：输入审核 -> LLM 调用 -> JSON 解析过滤 -> 输出审核。任意一环失败（如审核不通过），流程立即终止并返回相应的错误信息或默认放行策略。
 
 ### 2.5 组件职责与接口
 
 | 组件名称 | 主要职责 | 关键接口/方法 |
 | :--- | :--- | :--- |
 | **DescriptionComplianceAgent** | 核心评估器，编排大模型工作流 | `evaluate(target: TargetInfo)` |
-| **LogImageExtractor** | 下载图片并利用多模态能力解析文本与环境信息 | `extract_from_urls(image_urls: List[str])` |
 | **AuditClient** | 文本安全与合规审计 | `audit_text(content, content_type)` |
 | **PydanticOutputParser** | 强制 LLM 按照指定的数据模型输出 | `ComplianceResult` |
 
@@ -183,10 +172,9 @@ graph TB
 | :--- | :--- | :--- | :--- |
 | **TASK1.1** | 设计 `TargetInfo` 与 `ComplianceResult` 数据结构 | RA-TASK1 | 开发团队 |
 | **TASK1.2** | 编写基于 LangChain 的 `_evaluate_with_llm` 方法及 Prompt | RA-TASK1 | 开发团队 |
-| **TASK2.1** | 实现 `LogImageExtractor`，处理图片下载与 Base64 转换及多模态调用 | RA-TASK2 | 开发团队 |
-| **TASK3.1** | 实现正则表达式剥离 Markdown 代码块（如 ` ```json `）及处理未转义换行符的鲁棒解析 | RA-TASK3 | 开发团队 |
-| **TASK4.1** | 在代理流程前后串联 `audit_client` 的审核逻辑，处理阻断行为 | RA-TASK4 | 开发团队 |
-| **TASK5.1** | 修改 Webhook 处理流程，加入白名单校验与 `open` 状态过滤，调用代理并执行 GitCode API | RA-TASK5 | 开发团队 |
+| **TASK2.1** | 实现正则表达式剥离 Markdown 代码块（如 ` ```json `）及处理未转义换行符的鲁棒解析 | RA-TASK2 | 开发团队 |
+| **TASK3.1** | 在代理流程前后串联 `audit_client` 的审核逻辑，处理阻断行为 | RA-TASK2 | 开发团队 |
+| **TASK4.1** | 修改 Webhook 处理流程，加入白名单校验与 `open` 状态过滤，调用代理并执行 GitCode API | RA-TASK3 | 开发团队 |
 
 ---
 
@@ -210,7 +198,6 @@ graph TB
 ### 3.2 可靠性与韧性设计
 
 - **容错降级**: 如果输入文本过长（超过大模型上下文），或大模型调用超时/失败，系统会进行日志记录，并安全地退出评估（默认不打标签，避免误伤正常工单）。
-- **图片下载超时**: `LogImageExtractor` 中对图片下载设置了短超时限制，若下载失败则自动跳过，不阻塞文本内容的评估。
 
 ### 3.3 可服务性与可观测性
 
