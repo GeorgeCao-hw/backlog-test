@@ -36,35 +36,39 @@
 **验收标准:**
 
 ### 3.1 权限管理
-- **权限配置**：权限中心增加 admin 权限供运营使用
+- **权限配置**：权限中心增加 admin 权限供运营使用（PR #96：Ascend 和 CANN 会议支持 admin 权限后台强制结束会议）
 - **角色支持**：会议支持 admin、committer、maintainer 等角色
 - **权限校验**：强制结束接口仅 admin 角色可调用
+- **适用范围**：支持 Ascend、CANN 社区的运营者在后台强制结束会议
 
 ### 3.2 超时标记展示
 - **官网主页展示**：超时会议在官网主页显示超时标记
 - **我的会议展示**：超时会议在"我的会议"页面显示超时标记
 - **标记逻辑正确**：
-  - 非周期会议：从会议本身获取超时状态（`Meeting.is_overtime`）
-  - 周期性会议：从子会议获取超时状态（`MeetingCycleSubMeeting.is_overtime`）
+  - 使用业务会议状态字段 `status` 表示会议状态
+  - 状态值说明：`NOT_STARTED(0)`, `ONGOING(1)`, `ENDED(2)`, `OVERTIME(3)`, `CANCELLED(4)`
+  - 超时标记：`status = 3`（OVERTIME）表示会议超时
+  - 非周期会议：从 Meeting 模型的 `status` 字段获取状态
+  - 周期性会议：从 MeetingCycleSubMeeting 模型的 `status` 字段获取状态
 
 ### 3.3 定时任务同步
-- **执行频率**：定时任务每隔5分钟刷新一次会议状态
-- **时间对齐**：5分钟刚好和定会的时间点（0/15/30/45）保持同一个节奏
-- **状态同步**：正确更新会议的 `is_ongoing`（是否正在进行中）状态
-- **超时检测**：正确更新会议的 `is_overtime`（是否超时）状态
+- **执行频率**：定时任务 `handle_meeting_status.py` 每隔 5 分钟刷新一次会议状态
+- **时间对齐**：5 分钟刚好和定会的时间点（0/15/30/45）保持同一个节奏
+- **状态同步**：正确更新会议的 `status` 字段（NOT_STARTED/ONGOING/ENDED/OVERTIME/CANCELLED）
+- **超时检测**：当会议结束时间已到且 status 为 ONGOING 时，更新为 OVERTIME 状态
+- **状态字段**：新增 `status` 和 `status_updated_at` 字段到 Meeting 和 MeetingCycleSubMeeting 模型
 
 ### 3.4 强制结束功能
 - **前端按钮**：我的会议页面为管理员提供"强制结束会议"按钮
-- **API可用**：后端提供强制结束会议的API接口
+- **API 可用**：后端提供强制结束会议的 API 接口
 - **统一接口**：通过 `meeting_id` 和可选的 `sub_id` 参数区分非周期会议和周期子会议
 - **多平台支持**：支持 Zoom、WeLink、腾讯会议三个平台
 - **权限控制**：仅 admin 角色可见按钮并可调用接口
 
 ### 3.5 预警邮件通知
-- **发送时机**：会议即将结束之前的5分钟发送预警邮件
+- **发送时机**：在下一场会议开始前 30 分钟发送预警邮件（简化后的逻辑）
 - **收件人**：运营人员（通过 `OPERATOR_EMAILS` 配置）
 - **邮件内容**：包含会议名称、时间、社区等信息，提示需要立马介入处理
-- **去重机制**：同一会议不重复发送预警邮件（通过 `warning_email_sent` 字段控制）
 
 ---
 
@@ -79,52 +83,50 @@
 ```mermaid
 flowchart TD
     subgraph 定时任务层
-        A[定时任务: 每5分钟执行]
+        A[定时任务 handle_meeting_status.py: 每 5 分钟执行]
     end
 
     subgraph 状态同步
         A --> B[sync_meeting_status]
-        B --> C[调用第三方平台API获取会议状态]
-        C --> D[更新 is_ongoing 字段]
+        B --> C[调用第三方平台 API 获取会议状态]
+        C --> D[更新 status 字段]
     end
 
     subgraph 超时检测
         E[detect_overtime_meetings]
-        E --> F{会议结束时间 < 当前时间<br/>AND is_ongoing=True?}
-        F -->|是| G[更新 is_overtime=True]
-        F -->|否| H[跳过]
+        E --> F{会议结束时间 < 当前时间<br/>AND status=ONGOING?}
+        F -->|是 | G[更新 status=OVERTIME]
+        F -->|否 | H[跳过]
     end
 
     subgraph 预警通知
         I[send_overtime_warning_email]
-        I --> J{结束前5分钟<br/>AND is_ongoing=True?}
-        J -->|是| K{warning_email_sent=False?}
-        K -->|是| L[发送预警邮件给运营]
-        L --> M[标记 warning_email_sent=True]
+        I --> J{下一场会议开始前 30 分钟？}
+        J -->|是 | K[发送预警邮件给运营]
     end
 
     subgraph 运营决策
-        N[运营收到邮件] --> O{评估会议情况}
-        O -->|需要强制结束| P[点击强制结束按钮]
-        O -->|会议继续| Q[不做操作]
-        P --> R[调用API强制结束]
-        R --> S[清除超时状态]
+        L[运营收到邮件] --> M{评估会议情况}
+        M -->|需要强制结束 | N[点击强制结束按钮]
+        M -->|会议继续 | O[不做操作]
+        N --> P[调用 API 强制结束]
+        P --> Q[清除超时状态]
     end
 
     style A fill:#e1f5fe
-    style L fill:#fff3e0
-    style P fill:#f3e5f5
+    style K fill:#fff3e0
+    style N fill:#f3e5f5
 ```
 
 **关键模块说明：**
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
-| **权限中心** | 权限配置文件 | 新增 admin 权限，供运营使用 |
-| **模型层** | `models.py` | Meeting 和 MeetingCycleSubMeeting 新增超时相关字段 |
-| **DAO层** | `meeting_dao.py`、`meeting_cycle_sub_dao.py` | 提供状态同步、超时检测、预警邮件相关的数据访问方法 |
-| **定时任务** | `handle_meeting.py`、`handle_overtime_meeting.py` | 每5分钟执行状态同步、超时检测、预警邮件发送 |
-| **API层** | `controller/inner.py` | 提供强制结束会议的API接口（ForceEndMeetingView） |
+| **权限中心** | 权限配置文件 | 新增 admin 权限，供运营使用（PR #96：Ascend 和 CANN 会议支持） |
+| **模型层** | `models.py` | Meeting 和 MeetingCycleSubMeeting 新增 `status` 和 `status_updated_at` 字段 |
+| **DAO 层** | `meeting_dao.py`、`meeting_cycle_sub_dao.py` | 提供状态同步、超时检测、预警邮件相关的数据访问方法 |
+| **定时任务** | `handle_meeting_status.py` | 每 5 分钟执行状态同步、超时检测、预警邮件发送 |
+| **API 层** | `controller/inner.py` | 提供强制结束会议的 API 接口（ForceEndMeetingView） |
 | **适配器层** | `meeting_adapter_impl.py` | 多平台的强制结束和状态查询实现 |
 
 ### 4.2 任务清单
@@ -133,26 +135,25 @@ flowchart TD
 
 | 任务 ID | 任务描述 (Task Description) | 预期产出 (Deliverables) | 预期工作量（人天） |
 |---------|----------------------------|------------------------|-------------------|
-| **TASK1** | 权限中心增加 admin 权限配置 | 权限配置文件 | 0.5 |
-| **TASK2** | 模型层新增超时相关字段 | `models.py` 字段定义 + `0008_add_meeting_overtime_fields.py` 迁移文件 | 0.5 |
-| **TASK3** | DAO层实现超时检测相关的数据访问方法 | `meeting_dao.py`、`meeting_cycle_sub_dao.py` 新增方法 | 1 |
-| **TASK4** | 适配器层新增 `force_end_meeting` 和 `get_meeting_status` 方法 | `meeting_adapter_impl.py` + 各平台Action和API | 1.5 |
-| **TASK5** | 定时任务 `handle_meeting.py` 新增 `sync_meeting_status` 方法 | `handle_meeting.py` | 1 |
-| **TASK6** | 新增独立定时任务 `handle_overtime_meeting.py` | `handle_overtime_meeting.py` | 1 |
-| **TASK7** | API层实现强制结束会议接口 `ForceEndMeetingView` | `inner.py` 新增API视图 | 1 |
-| **TASK8** | 前端官网主页增加超时标记展示 | 前端代码 | 0.5 |
-| **TASK9** | 前端我的会议增加超时标记和强制结束按钮 | 前端代码 | 1 |
-| **TASK10** | 编写单元测试 | 测试文件 | 1 |
+| **TASK1** | 权限中心增加 admin 权限配置（PR #96：Ascend 和 CANN 会议支持） | 权限配置文件 | 0.5 |
+| **TASK2** | 模型层新增 status 和 status_updated_at 字段 | `models.py` 字段定义 + 迁移文件 | 0.5 |
+| **TASK3** | DAO 层实现超时检测相关的数据访问方法 | `meeting_dao.py`、`meeting_cycle_sub_dao.py` 新增方法 | 1 |
+| **TASK4** | 适配器层新增 `force_end_meeting` 和 `get_meeting_status` 方法 | `meeting_adapter_impl.py` + 各平台 Action 和 API | 1.5 |
+| **TASK5** | 定时任务 `handle_meeting_status.py` 实现 | `handle_meeting_status.py` | 1 |
+| **TASK6** | API 层实现强制结束会议接口 `ForceEndMeetingView` | `inner.py` 新增 API 视图 | 1 |
+| **TASK7** | 前端官网主页增加超时标记展示 | 前端代码 | 0.5 |
+| **TASK8** | 前端我的会议增加超时标记和强制结束按钮 | 前端代码 | 1 |
+| **TASK9** | 编写单元测试 | 测试文件 | 1 |
 
 ---
 
 ## 5. 需求相关性分析
 
-> **操作说明**：根据上述拆解出的 Task，识别其变更行为。任何一项勾选为"是"：打上对应issue标签，必须执行对应的流程门禁。全部未勾选：该需求自动判定为轻量化特性，打上need_light标签。
+> **操作说明**：根据上述拆解出的 Task，识别其变更行为。任何一项勾选为"是"：打上对应 issue 标签，必须执行对应的流程门禁。全部未勾选：该需求自动判定为轻量化特性，打上 need_light 标签。
 
 ### A. 安全相关性分析
 
-> 若涉及以下任一项，打标 `need_security`标签，PR 必须关联特性issue的架构设计文档（含安全设计部分）**如勾选需要给出原因**。
+> 若涉及以下任一项，打标 `need_security`标签，PR 必须关联特性 issue 的架构设计文档（含安全设计部分）**如勾选需要给出原因**。
 
 * [ ] **边界变更**：新增公网端口、修改防火墙规则、变更网关配置。
 * [ ] **凭证处理**：涉及密钥（Secret/Key）、Token、证书的存储或分发。
@@ -161,22 +162,22 @@ flowchart TD
   > TASK1 新增 admin 权限用于运营人员强制结束会议，涉及权限模型变更，触发本项。
 * [ ] **供应链**：引入新的第三方二进制文件、SDK 或重大版本依赖升级。
 * [ ] **隐私风险评估**：涉及用户个人数据（Email、手机号、IP、邮箱 等）的处理。
-* [ ] **AI使用**：涉及AIGC能力应用，并提供服务。
+* [ ] **AI 使用**：涉及 AIGC 能力应用，并提供服务。
 
 ### B. 架构设计相关性分析
 
-> 若涉及以下任一项，打标 `need_design`标签，PR 必须关联特性issue的架构设计文档。 **如勾选需要给出原因**。
+> 若涉及以下任一项，打标 `need_design`标签，PR 必须关联特性 issue 的架构设计文档。 **如勾选需要给出原因**。
 
-* [x] A环节判定需要完成安全设计
+* [x] A 环节判定需要完成安全设计
 * [ ] 改变了现有系统的物理/逻辑拓扑
 * [x] **新增或大幅修改对外暴露的 API/CLI 接口**
 
-  > TASK7 新增强制结束会议 API（ForceEndMeetingView），属于对外暴露接口的新增，触发本项。
+  > TASK6 新增强制结束会议 API（ForceEndMeetingView），属于对外暴露接口的新增，触发本项。
 * [ ] 引入了新的中间件、数据库或三方核心组件
 
 ### C. 系统集成测试相关性分析
 
-> 若涉及以下任一项，打标 `need_itest`标签，PR必须关联特性issue的测试策略和测试报告文档。 **如勾选需要给出原因**。
+> 若涉及以下任一项，打标 `need_itest` 标签，PR 必须关联特性 issue 的测试策略和测试报告文档。 **如勾选需要给出原因**。
 
 * [x] 上述环节判定需要执行安全设计或架构设计。
 * [ ] **跨组件影响**：变更会触发下游服务或关联系统的连锁反应（级联效应）。
@@ -186,15 +187,15 @@ flowchart TD
 * [ ] **环境强依赖**：功能高度依赖内核参数、网络拓扑或特定的物理挂载。
 * [x] **端到端流程**：涉及从用户输入到持久化存储的全链路逻辑。
 
-  > 完整链路为：定时任务触发 -> 第三方API调用 -> 状态检测 -> 数据库更新 -> 邮件发送 -> 前端展示 -> API调用，覆盖从触发到持久化的全链路，触发本项。
+  > 完整链路为：定时任务触发 -> 第三方 API 调用 -> 状态检测 -> 数据库更新 -> 邮件发送 -> 前端展示 -> API 调用，覆盖从触发到持久化的全链路，触发本项。
 
 ### D. 用户体验相关性分析
 
-> 若涉及以下任一项，打标 `need_ux`标签，PR必须关联特性issue的用户体验设计文档。 **如勾选需要给出原因**。
+> 若涉及以下任一项，打标 `need_ux` 标签，PR 必须关联特性 issue 的用户体验设计文档。 **如勾选需要给出原因**。
 
 * [x] **交互逻辑变更**：涉及 Web 门户、控制台（Dashboard）或命令行工具（CLI）的交互流程调整。
 
-  > TASK8、TASK9 涉及官网主页和我的会议页面新增超时标记和强制结束按钮，属于前端交互变更，触发本项。
+  > TASK7、TASK8 涉及官网主页和我的会议页面新增超时标记和强制结束按钮，属于前端交互变更，触发本项。
 * [ ] **感知性能变动**：变更可能显著影响页面的加载时间、同步请求的响应时延或异步任务的进度反馈。
 * [x] **文档与辅助能力**：涉及报错提示语、帮助中心链接、FAQ 或新功能的 Runbook 说明。
 
@@ -206,7 +207,7 @@ flowchart TD
 * [x] need_security（需架构设计（含安全威胁分析和安全设计））
 * [x] **need_design**（需架构设计）
 * [x] **need_itest**（需执行测试策略设计和全链路集成测试）
-* [x] **need_ux**（需架构设计（含UX设计））
+* [x] **need_ux**（需架构设计（含 UX 设计））
 * [ ] need_light（上述均未勾选，走快速合入通道）
 
 ---
@@ -222,13 +223,13 @@ flowchart TD
 | **优先级** | 该需求优先级评估（高/中/低）？ | 高，会议超时直接影响下一场会议的正常进行，属于用户体验的关键问题 |
 | **通用性** | 该需求是否解决 3 个以上业务方的共性痛点？ | 是，所有使用共享资源的会议都可能面临超时冲突问题 |
 | **必要性** | 现有组件通过配置变更是否无法实现目标或没有不用开发的替代方案？ | 是，需要定时检测、状态标记、预警通知、强制结束等组合能力，无法通过配置变更实现 |
-| **工作量** | 预计总工作量 | 9 人天 |
+| **工作量** | 预计总工作量 | 8 人天 |
 | **价值评估** | 实现后能减少多少手动操作或提升多少系统稳定性？ | 实现后运营可主动发现和处理超时会议，减少因超时导致的会议冲突投诉；将决策权交给运营，更具人性化 |
 
 > **状态定义：** **Accept (准入)** | **Reject (驳回)** | **Pending (待议)**
 
 **建议结论**：Accept
 
-**原因描述:** 会议超时是影响用户体验的关键问题，当同一天连续两场会议共用后台资源时，超时会直接导致下一场会议无法正常开始。本需求通过定时检测、状态标记、预警通知的组合方案，将会议优先权的决策交给运营，比自动强制结束更具人性化。整体实现成本可控（9 人天），建议准入。
+**原因描述:** 会议超时是影响用户体验的关键问题，当同一天连续两场会议共用后台资源时，超时会直接导致下一场会议无法正常开始。本需求通过定时检测、状态标记、预警通知的组合方案，将会议优先权的决策交给运营，比自动强制结束更具人性化。整体实现成本可控（8 人天），建议准入。
 
 ---
