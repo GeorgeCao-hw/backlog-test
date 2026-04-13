@@ -19,7 +19,7 @@
 - 文档仅覆盖 `sync_to_hf_and_modelscope.py` 的能力边界与流程，不包含 `sync_to_hf.py`、`sync_to_modelscope.py`。
 - 需求文档完整填写模板核心章节：场景、验收、逻辑、任务拆解、相关性分析、价值评估。
 - 文档中给出可验证的同步完成判据：HF `.last_synced_sha` 与源仓库 SHA 一致；ModelScope 推送成功日志可观测。
-- 文档中明确关键配置来源（`/vault/secrets/config.yaml` + 环境变量覆盖）与失败恢复机制（进度文件恢复）。
+- 文档中明确关键配置来源（`/vault/secrets/config.yaml` ）与失败恢复机制（进度文件恢复）。
 
 ---
 

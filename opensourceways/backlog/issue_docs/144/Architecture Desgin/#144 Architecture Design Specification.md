@@ -20,7 +20,6 @@
 graph TB
     subgraph "配置层"
         Vault["/vault/secrets/config.yaml"]
-        Env["环境变量覆盖"]
     end
 
     subgraph "执行层"
@@ -70,7 +69,7 @@ graph LR
 
 | 组件/函数 | 职责 | 输入 | 输出 |
 |---|---|---|---|
-| `load_config` | 读取并合并配置 | vault 文件、环境变量 | `HF_ORG/HF_TOKEN/MS_NAMESPACE/MS_TOKEN/...` |
+| `load_config` | 读取并合并配置 | vault 文件 | 配置矩阵 |
 | `sync_all` | 组织仓库列表并串行调度 | 仓库清单 | 逐仓库同步结果 |
 | `sync_repo` | 单仓库主流程编排 | `repo_info` | HF/MS 同步状态 |
 | `upload_file_with_logs` | 上传单文件到 HF | 本地文件、相对路径、目标 repo id | 上传成功/异常 |
