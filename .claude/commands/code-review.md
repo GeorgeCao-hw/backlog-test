@@ -23,7 +23,7 @@
 ### 第二步：理解变更上下文
 1. 读取 `AGENTS.md` 了解仓库规范和标签体系
 2. 根据 PR 关联的 Issue（从 PR body 中解析），使用 `gh issue view` 获取 Issue 信息
-3. 如涉及 `opensourceways/issue_docs/{issueId}/` 下的文档，了解该 Issue 的需求背景
+3. 如涉及 `opensourceways/{repo}/issue_docs/{issueId}/` 下的文档，了解该 Issue 的需求背景
 
 ### 第三步：逐文件检视
 按以下维度逐文件检查（不适用的维度跳过）：

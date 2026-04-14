@@ -18,13 +18,21 @@ backlog/
 │   ├── Test/                        #   测试策略 + 测试报告模板
 │   ├── Release/                     #   变更计划说明书模板
 │   └── Learn From the Incident/     #   故障复盘报告模板
-├── opensourceways/issue_docs/       # 各 Issue 的交付件归档
-│   └── {issueId}/                   #   每个 Issue 独立目录
-│       ├── Requirement Analysis/    #     需求分析说明书
-│       ├── Architecture Desgin/     #     架构设计说明书
-│       ├── Test/                    #     测试策略 + 测试报告
-│       ├── Release/                 #     变更计划
-│       └── Docs/                    #     交付件总结等
+├── opensourceways/              # GitHub 组织下各仓库的 issue 交付件目录
+│   ├── backlog/issue_docs/      #   backlog 仓库的各 Issue 交付件归档
+│   │   └── {issueId}/
+│   │       ├── Requirement Analysis/    #     需求分析说明书
+│   │       ├── Architecture Desgin/     #     架构设计说明书
+│   │       ├── Test/                    #     测试策略 + 测试报告
+│   │       ├── Release/                 #     变更计划
+│   │       └── Docs/                    #     交付件总结等
+│   ├── {repo}/issue_docs/       #   其他仓库的各 Issue 交付件归档
+│   │   └── {issueId}/
+│   │       ├── Requirement Analysis/
+│   │       ├── Architecture Desgin/
+│   │       ├── Test/
+│   │       ├── Release/
+│   │       └── Docs/
 ├── .claude/commands/                # AI 辅助 Skill（可复用的自动化命令）
 ├── 🛡️ *.md                          # 安全工具使用指南（Gitleaks / SAST / UT 覆盖率）
 └── {project}/                       # 各项目子目录（openeuler, mindspore, ascend...）
@@ -32,7 +40,7 @@ backlog/
 
 ## 开发流程
 
-每个 GitHub Issue 按以下阶段推进，每个阶段产出对应文档归档到 `opensourceways/issue_docs/{issueId}/`：
+每个 GitHub Issue 按以下阶段推进，每个阶段产出对应文档归档到 `opensourceways/{repo}/issue_docs/{issueId}/`（如 backlog 仓库为 `opensourceways/backlog/issue_docs/{issueId}/`）：
 
 ```
 Issue 创建 → 需求分析 → 架构设计 → 测试策略 → 开发实现 → 变更发布 → (故障复盘)
@@ -80,10 +88,10 @@ Issue 创建 → 需求分析 → 架构设计 → 测试策略 → 开发实现
 
 ## Issue 交付件归档
 
-每个 Issue 的文档归档在 `opensourceways/issue_docs/{issueId}/` 下，按阶段创建目录，例如：
+每个 Issue 的文档归档在 `opensourceways/{repo}/issue_docs/{issueId}/` 下，按阶段创建目录，例如：
 
 ```
-opensourceways/issue_docs/29/
+opensourceways/backlog/issue_docs/29/
 ├── Requirement Analysis/
 │   └── #29 Requirement Analysis Specification.md
 ├── Architecture Desgin/

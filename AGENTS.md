@@ -24,13 +24,21 @@ backlog/
 │   ├── Test/                    # 测试策略 + 测试报告模板
 │   ├── Release/                 # 变更计划说明书模板
 │   └── Learn From the Incident/ # 故障复盘报告模板
-├── opensourceways/issue_docs/   # 各 Issue 的交付件目录
-│   └── {issueId}/               # 每个 Issue 独立目录
-│       ├── Requirement Analysis/
-│       ├── Architecture Desgin/
-│       ├── Test/
-│       ├── Release/
-│       └── Docs/
+├── opensourceways/              # GitHub 组织下各仓库的 issue 交付件目录
+│   ├── backlog/issue_docs/      # backlog 仓库的各 Issue 交付件
+│   │   └── {issueId}/
+│   │       ├── Requirement Analysis/
+│   │       ├── Architecture Desgin/
+│   │       ├── Test/
+│   │       ├── Release/
+│   │       └── Docs/
+│   ├── {repo}/issue_docs/       # 其他仓库的各 Issue 交付件
+│   │   └── {issueId}/
+│   │       ├── Requirement Analysis/
+│   │       ├── Architecture Desgin/
+│   │       ├── Test/
+│   │       ├── Release/
+│   │       └── Docs/
 ├── .claude/commands/            # Claude Code 自定义命令（Skill）
 └── {project}/                   # 各项目子目录（openeuler, mindspore...）
 ```
@@ -39,7 +47,7 @@ backlog/
 
 ### 需求文档生命周期
 
-每个 GitHub Issue 对应 `opensourceways/issue_docs/{issueId}/` 下的一组文档，按以下阶段交付：
+每个 GitHub Issue 对应 `opensourceways/{repo}/issue_docs/{issueId}/` 下的一组文档（如 backlog 仓库为 `opensourceways/backlog/issue_docs/{issueId}/`），按以下阶段交付：
 
 1. **需求分析**：填写需求分析说明书，完成需求相关性分析（安全/架构/测试/UX），确定需要打的标签
 2. **架构设计**：如需 `need_security` 或 `need_design`，必须完成架构设计文档（含安全威胁分析）

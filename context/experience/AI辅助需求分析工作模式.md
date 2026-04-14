@@ -8,7 +8,7 @@
 ### 工作流程
 1. 使用 `gh issue view` 获取 Issue 完整信息（不要猜测）
 2. 阅读 `templates/` 下的模板了解标准格式
-3. 参考 `opensourceways/issue_docs/` 下已有的优秀文档了解写作深度
+3. 参考 `opensourceways/{repo}/issue_docs/` 下已有的优秀文档了解写作深度（如 `opensourceways/backlog/issue_docs/`）
 4. 按阶段创建目录 → 填写当前阶段文档 → 提示下一步
 5. 沉淀经验到 `context/experience/`
 
