@@ -18,6 +18,15 @@
 **设计说明/归档：** 单进程采集服务，遵循 om-dataarts 分层架构规范（api/collector/task/db），外部依赖为 GitHub API、PostgreSQL。
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#9c27b0',
+    'primaryBorderColor': '#6a1b9a',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
 graph TB
     subgraph "配置层"
         Config["config.yaml"]
@@ -65,6 +74,15 @@ graph TB
 **设计说明/归档：** 数据从 GitHub API 采集，经过 step 时间提取和 device 映射，聚合后写入两张表。
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#4caf50',
+    'primaryBorderColor': '#2e7d32',
+    'primaryTextColor': '#ffffff',
+    'fontSize': '14px'
+  }
+}}%%
 graph LR
     A["加载配置"] --> B["初始化 DB/API Client"]
     B --> C["获取 workflow runs"]
@@ -128,7 +146,15 @@ graph LR
 
 ## 3. 非功能设计
 
-### 3.1 可靠性与韧性设计评估和设计
+### 3.1 安全与隐私设计
+
+> **注意**：当需求分析判定触发 `need_security` 标签时，本章节为必填。
+
+**不涉及，原因：** 需求分析判定无安全相关性。仅采集 CI 运行数据，不暴露 API，不含用户隐私，Token 通过环境变量注入。
+
+---
+
+### 3.2 可靠性与韧性设计评估和设计
 
 **设计说明/归档：**
 
@@ -147,7 +173,7 @@ graph LR
 
 ---
 
-### 3.2 可服务性与可观测性评估和设计
+### 3.3 可服务性与可观测性评估和设计
 
 **设计说明/归档：**
 
@@ -165,7 +191,7 @@ graph LR
 
 ---
 
-### 3.3 性能与伸缩性评估和设计
+### 3.4 性能与伸缩性评估和设计
 
 **设计说明/归档：**
 
@@ -183,7 +209,7 @@ graph LR
 
 ---
 
-### 3.4 测试覆盖设计
+### 3.5 测试覆盖设计
 
 **设计说明/归档：**
 

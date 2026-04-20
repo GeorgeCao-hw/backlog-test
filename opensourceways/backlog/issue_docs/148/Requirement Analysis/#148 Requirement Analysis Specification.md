@@ -29,18 +29,16 @@
 
 **验收标准:**
 
-- 支持通过 YAML 配置文件指定多个 GitHub 仓库进行 CI 数据采集
-- 支持 step 名称配置，自动提取 download_time 和 prepare_time 指标
-- 支持 workflow_name 到 device_type（NPU/GPU）的精确匹配映射
-- 正确采集并计算 run_time、wait_time、e2e_time 等时间指标
-- 正确聚合 job 级别数据到 workflow 级别（按 commit_id + workflow_id）
-- 数据写入 fact_ci_workflow 表和 dws_opensource_ci 表
-- 支持增量更新：自动追踪非 completed 状态的 workflow 并更新
+- 支持 YAML 配置指定多仓库 CI 数据采集
+- 正确提取 download_time、prepare_time、run_time、wait_time、e2e_time 指标
+- 正确映射 workflow_name 到 device_type（NPU/GPU）
+- 数据写入 fact_ci_workflow 和 dws_opensource_ci 表
+- 增量更新机制正常工作
 - 单元测试覆盖率 ≥ 90%
 
 ---
 
-## 4. 需求设计与分解
+## 4 需求设计与分解
 
 > 说明：基于初步方案，将需求拆解为可实施的原子 Task。后续的流程判定将严格依据这些 Task 的影响范围进行。
 
@@ -50,12 +48,9 @@
 
 **逻辑方案:**
 
-1. **配置层**: YAML 配置文件定义仓库列表、step 名称映射、device 类型映射
-2. **采集层**: WorkflowTimeExporter 通过 GitHub API 获取 workflow runs 和 jobs 数据
-3. **处理层**: 解析 job steps 提取时间指标，根据 workflow_name 映射 device_type
-4. **存储层**: 写入 fact_ci_workflow（明细表）和 dws_opensource_ci（聚合表）
+配置层定义仓库和映射规则，采集层通过 GitHub API 获取数据，处理层提取时间指标并映射 device_type，存储层写入 PostgreSQL。增量更新追踪未完成 workflow。
 
-**流程图示例（使用Mermaid）：**
+**流程图:**
 
 ```mermaid
 %%{init: {
@@ -68,37 +63,28 @@
   }
 }}%%
 flowchart TD
-    A["加载 YAML 配置"] --> B["解析 repos 列表"]
-    B --> C["加载 step_configs 映射"]
-    C --> D["循环处理每个仓库"]
-    D --> E["调用 GitHub API 获取 workflow runs"]
-    E --> F["获取每个 run 的 jobs 详情"]
-    F --> G["提取 step 时间指标"]
-    G --> H["映射 device_type"]
-    H --> I["构建 fact 记录"]
-    I --> J["聚合为 dws 记录"]
-    J --> K["写入 PostgreSQL"]
-    K --> L{"还有仓库?"}
-    L -- 是 --> D
-    L -- 否 --> M["完成采集"]
+    A["加载配置"] --> B["获取 workflow runs"]
+    B --> C["获取 jobs 详情"]
+    C --> D["提取时间指标"]
+    D --> E["映射 device_type"]
+    E --> F["写入数据库"]
 ```
 
 ### 4.2 任务清单
 
+> 合并相关性强的工作，Task 数量控制在 2-4 个，测试/文档包含在对应功能 Task 中。
+
 **任务清单:**
 
-| 任务 ID   | 任务描述 (Task Description)                                                                 | 预期产出 (Deliverables)         | 预期工作量（人天） |
-|-----------|---------------------------------------------------------------------------------------------|---------------------------------|------------------|
-| **task1** | 实现 WorkflowStepConfig 和 WorkflowDeviceConfig 数据模型 | om/config/models.py | 0.5 |
-| **task2** | 实现 WorkflowTimeExporter 核心采集逻辑（API调用、数据解析、时间计算） | om/collector/workflow_metric_collector.py | 2 |
-| **task3** | 实现 dws_opensource_ci 表定义 | om/db/table/dws_table.py | 0.5 |
-| **task4** | 实现 CI Workflow Task 入口脚本 | om/tasks/ci_workflow_task.py | 0.5 |
-| **task5** | 编写单元测试（覆盖率 ≥ 90%） | tests/collector/test_workflow_metric_collector.py | 1 |
-| **task6** | 编写配置示例文件 | config_workflow_*.yaml.example | 0.5 |
+| 任务 ID | 任务描述 | 预期产出 | 预期工作量（人天） |
+|---------|----------|----------|------------------|
+| **task1** | 实现数据模型 + 核心采集逻辑（配置加载、API调用、时间提取、device映射） | om/config/models.py, om/collector/workflow_metric_collector.py | 2.5 |
+| **task2** | 实现数据表定义 + 聚合逻辑 + 增量更新 | om/db/table/dws_table.py, 聚合函数 | 1 |
+| **task3** | 编写单元测试 + 配置示例 | tests/, config_workflow_*.yaml.example | 1.5 |
 
 ---
 
-## 5. 需求相关性分析
+## 5 需求相关性分析
 
 > **操作说明**：根据上述拆解出的 Task，识别其变更行为。任何一项勾选为"是"：打上对应issue标签，必须执行对应的流程门禁。全部未勾选：该需求自动判定为轻量化特性，打上need_light标签。
 
@@ -137,7 +123,22 @@ flowchart TD
 
 ---
 
-## 6. 风险评估
+## 6. 需求范围边界
+
+**本次需求范围：**
+- GitHub Actions workflow/jobs 数据采集
+- step 时间指标提取（download_time、prepare_time）
+- device_type 映射（NPU/GPU）
+- 数据写入 PostgreSQL
+
+**不在本次需求范围内：**
+- CI 数据可视化分析
+- 自动 CI 优化建议
+- 跨仓库数据对比
+
+---
+
+## 7. 风险评估
 
 | 风险类型 | 风险描述 | 影响程度 | 应对措施 |
 |----------|----------|----------|----------|
@@ -147,9 +148,21 @@ flowchart TD
 
 ---
 
-## 7. 附录
+## 8. 价值识别与业务评估
 
-### 7.1 配置示例
+| 评估维度 | 评估问题 | 评估结果 | 说明 |
+|----------|----------|----------|------|
+| 业务价值 | 是否解决实际业务痛点？ | 是 | 为 CI 优化提供数据支撑 |
+| 技术可行性 | 技术方案是否可行？ | 是 | 使用现有 GitHub API 和 PostgreSQL |
+| 资源投入 | 投入产出是否合理？ | 是 | 5 人天工作量，价值明确 |
+
+**结论**: **Accept** - 需求价值明确，技术可行，建议实施。
+
+---
+
+## 9. 附录
+
+### 9.1 配置示例
 
 ```yaml
 workflow:
@@ -182,7 +195,7 @@ database:
   password: "${DB_PASSWORD}"
 ```
 
-### 7.2 数据表字段说明
+### 9.2 数据表字段说明
 
 **dws_opensource_ci 表核心字段：**
 
