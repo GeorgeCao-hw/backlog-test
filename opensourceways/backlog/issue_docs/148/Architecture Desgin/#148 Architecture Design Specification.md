@@ -5,7 +5,7 @@
 ## 1. 基础信息
 
 * **需求链接**: https://github.com/opensourceways/backlog/issues/148
-* **需求名称**: **GitHub CI Workflow 指标采集系统**
+* **需求名称**: GitHub CI Workflow 指标采集系统
 * **开发责任人**: Creyson-peng
 * **设计目标**: 实现可配置化的 GitHub Actions CI 数据采集，支持多仓库、step 时间提取、device 类型映射，数据聚合到 dws_opensource_ci 表供分析使用。
 
@@ -13,9 +13,15 @@
 
 ## 2. 功能设计
 
+> **说明**：描述系统的组件构成、职责划分及交互逻辑。
+
 ### 2.1 架构图
 
+> 此处建议插入架构拓扑系统组件图或时序图，描述组件间的交互关系。推荐使用Mermaid实现，可代码化，GitHub可渲染。
+
 **设计说明/归档：** 单进程采集服务，遵循 om-dataarts 分层架构规范（api/collector/task/db），外部依赖为 GitHub API、PostgreSQL。
+
+**架构图示例（使用Mermaid）：**
 
 ```mermaid
 %%{init: {
@@ -39,12 +45,10 @@ graph TB
 
     subgraph "采集层 om/collector"
         Collector["WorkflowTimeExporter"]
-        BaseCollector["BaseCollector"]
     end
 
     subgraph "API层 om/api"
         GithubAPI["GithubApiClient"]
-        RateLimiter["RateLimiter"]
     end
 
     subgraph "数据层 om/db"
@@ -69,9 +73,18 @@ graph TB
     PG --> DwsTable
 ```
 
+**说明：**
+- 使用Graph展示系统组件和依赖关系
+- 使用subgraph分组相关组件
+- 标注通信协议和数据流向
+
 ### 2.2 数据流图
 
+> 此处建议插入数据流图，描述核心业务数据的生命周期，即威胁建模的基础。推荐使用Mermaid实现，可代码化，GitHub可渲染。
+
 **设计说明/归档：** 数据从 GitHub API 采集，经过 step 时间提取和 device 映射，聚合后写入两张表。
+
+**数据流图示例（使用Mermaid）：**
 
 ```mermaid
 %%{init: {
@@ -84,19 +97,33 @@ graph TB
   }
 }}%%
 graph LR
-    A["加载配置"] --> B["初始化 DB/API Client"]
-    B --> C["获取 workflow runs"]
-    C --> D["获取 jobs 详情"]
-    D --> E["提取 step 时间"]
-    E --> F["映射 device_type"]
-    F --> G["构建 fact 记录"]
-    G --> H["写入 fact_ci_workflow"]
-    H --> I["聚合 workflow 级别"]
-    I --> J["计算 success_rate<br/>e2e_time"]
-    J --> K["写入 dws_opensource_ci"]
+    subgraph "数据源"
+        Source["GitHub API"]
+    end
+    subgraph "处理"
+        Fetch["获取 workflow runs"]
+        Extract["提取 step 时间"]
+        Map["映射 device_type"]
+    end
+    subgraph "存储"
+        Fact["fact_ci_workflow"]
+        Dws["dws_opensource_ci"]
+    end
+    Source -->|workflow/jobs 数据| Fetch
+    Fetch --> Extract
+    Extract --> Map
+    Map -->|job 级别| Fact
+    Fact -->|聚合| Dws
 ```
 
+**说明：**
+- 使用DFD展示数据流向和处理步骤
+- 标注数据在各阶段的转换和处理
+- 为威胁建模和安全设计提供基础
+
 ### 2.3 组件职责与接口
+
+> 列出新增/修改的组件及其定义的 API 规范。
 
 **设计说明/归档：**
 
@@ -120,6 +147,8 @@ graph LR
 
 ### 2.4 UX设计
 
+> 设计目标：确保功能不仅"可用"，而且"好用"，降低开发者的认知负担和运维人员的误操作风险。
+
 **设计说明/归档：** 本服务为命令行脚本，不涉及 GUI 设计。可用性通过以下方式保障：
 
 1. **配置文件驱动**: 所有采集参数通过 YAML 配置，支持环境变量注入
@@ -128,14 +157,18 @@ graph LR
 
 ### 2.5 SOD设计
 
-**设计说明/归档：** 不涉及新增权限域模型。权限使用 GitHub Token，通过配置文件或环境变量注入，不在代码中硬编码。数据库连接使用 PostgresClient 统一管理。
+> 设计目标：通过维护SOD权限设计文档，确保权限设计可审计、可复用、可跨服务重用。 SOD权限设计参考[XX SOD权限设计.md](XX%20SOD%E6%9D%83%E9%99%90%E8%AE%BE%E8%AE%A1.md)
+
+**不涉及，原因：** 不涉及新增权限域模型。权限使用 GitHub Token，通过配置文件或环境变量注入，不在代码中硬编码。数据库连接使用 PostgresClient 统一管理。
 
 ### 2.6 功能设计分解TASK清单
 
 **设计说明/归档：**
 
-| 任务 ID | 可服务性任务描述 | 责任人 |
-|---|---|---|
+**任务清单:**
+
+| 任务 ID             | 可服务性任务描述                                    | 责任人    |
+|-------------------|---------------------------------------------|--------|
 | **CI-DES-001** | 设计 WorkflowStepConfig/WorkflowDeviceConfig 数据模型 | Creyson-peng |
 | **CI-DES-002** | 设计 _extract_step_time 精确名称匹配逻辑 | Creyson-peng |
 | **CI-DES-003** | 设计 _resolve_device_type workflow_name 精确映射 | Creyson-peng |
@@ -146,15 +179,19 @@ graph LR
 
 ## 3. 非功能设计
 
-### 3.1 安全与隐私设计
+### 3.1 安全与隐私设计评估和设计
 
-> **注意**：当需求分析判定触发 `need_security` 标签时，本章节为必填。
+> **注意**：仅当需求判定为 **`need_security`** 时，本章节为必填项。 **无该标签可删除本章节。**
 
-**不涉及，原因：** 需求分析判定无安全相关性。仅采集 CI 运行数据，不暴露 API，不含用户隐私，Token 通过环境变量注入。
+**不涉及，原因：** 需求分析判定无 `need_security` 标签。仅采集 CI 运行数据，不暴露 API，不含用户隐私，Token 通过环境变量注入。
 
 ---
 
-### 3.2 可靠性与韧性设计评估和设计
+### 3.2 可靠性与韧性设计评估和设计（可选）
+
+> **注意**：根据项目定级决定，含Core、Critical服务变更需要完成
+
+> **关注点**：极端情况下的生存与恢复能力。
 
 **设计说明/归档：**
 
@@ -166,14 +203,16 @@ graph LR
 
 **任务清单:**
 
-| 任务 ID | 可靠性与韧性任务描述 | 责任人 |
-|---|---|---|
+| 任务 ID             | 可靠性与韧性任务描述                         | 责任人 |
+|-------------------|------------------------------------|-----|
 | **CI-NFR-001** | 实现 _update_incomplete_workflows 增量更新机制 | Creyson-peng |
 | **CI-NFR-002** | 实现异常捕获与日志警告（G.ERR.05 合规） | Creyson-peng |
 
 ---
 
-### 3.3 可服务性与可观测性评估和设计
+### 3.3 可服务性与可观测性评估和设计（可选）
+
+> **关注点**：排障效率与全生命周期管理，确保故障可感知、可定位、可修复。
 
 **设计说明/归档：**
 
@@ -184,14 +223,16 @@ graph LR
 
 **任务清单:**
 
-| 任务 ID | 可服务性任务描述 | 责任人 |
-|---|---|---|
+| 任务 ID             | 可服务性任务描述                                    | 责任人    |
+|-------------------|---------------------------------------------|--------|
 | **CI-OBS-001** | 规范日志输出格式与关键字 | Creyson-peng |
 | **CI-OBS-002** | 实现元数据表同步时间追踪 | Creyson-peng |
 
 ---
 
-### 3.4 性能与伸缩性评估和设计
+### 3.4 性能与伸缩性评估和设计（可选）
+
+> **关注点**：社区生态兼容性与未来扩展。
 
 **设计说明/归档：**
 
@@ -202,36 +243,10 @@ graph LR
 
 **任务清单:**
 
-| 任务 ID | 性能任务描述 | 责任人 |
-|---|---|---|
+| 任务 ID             | 性能任务描述                               | 责任人    |
+|-------------------|--------------------------------------|--------|
 | **CI-PERF-001** | 评估 GitHub API 速率限制对多仓库采集的影响 | Creyson-peng |
 | **CI-PERF-002** | 实现 bulk_upsert_data 批量写入优化 | Creyson-peng |
-
----
-
-### 3.5 测试覆盖设计
-
-**设计说明/归档：**
-
-测试覆盖率目标 ≥ 90%，覆盖以下场景：
-
-| 测试类 | 覆盖方法 | 测试数量 |
-|--------|----------|----------|
-| TestWorkflowTimeExporterInit | `__init__` | 5 |
-| TestWorkflowTimeExporterLoadStepConfigs | `_load_step_configs` | 5 |
-| TestWorkflowTimeExporterResolveDeviceType | `_resolve_device_type` | 5 |
-| TestWorkflowTimeExporterExtractStepTime | `_extract_step_time` | 9 |
-| TestWorkflowTimeExporterCalculateDurationSec | `_calculate_duration_sec` | 7 |
-| TestWorkflowTimeExporterAggregateWorkflowRun | `_aggregate_workflow_run` | 7 |
-| TestWorkflowTimeExporterProcessRepo | `_process_repo` | 3 |
-| TestWorkflowTimeExporterUpdateIncompleteWorkflows | `_update_incomplete_workflows` | 5 |
-
-**任务清单:**
-
-| 任务 ID | 测试任务描述 | 责任人 |
-|---|---|---|
-| **CI-TEST-001** | 编写核心方法单元测试（覆盖率 ≥ 90%） | Creyson-peng |
-| **CI-TEST-002** | 编写异常处理场景测试 | Creyson-peng |
 
 ---
 
@@ -335,4 +350,4 @@ class WorkflowDeviceConfig:
 | 禁止裸 except | 合规 | 使用 `except (ValueError, TypeError, AttributeError) as e:` |
 | 禁止硬编码 Token | 合规 | 通过环境变量注入 |
 | 批量写入 | 合规 | 使用 bulk_upsert_data |
-| 单元测试覆盖率 | 合规 | ≥ 90%（当前 100%） |
+| 单元测试覆盖率 | 合规 | ≥ 90% |
