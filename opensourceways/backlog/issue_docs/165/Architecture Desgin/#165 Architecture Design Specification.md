@@ -450,8 +450,8 @@ graph TB
 | res_instance_id | TEXT NOT NULL | 资源实例 ID |
 | resource_name | TEXT | 资源名称 |
 | timestamp | TIMESTAMP(6) NOT NULL | 小时时间戳 |
-| cpu_useage | NUMERIC(20,4) | CPU 使用率（%） |
-| mem_useage | NUMERIC(20,4) | 内存使用率（%） |
+| cpu_usage | NUMERIC(20,4) | CPU 使用率（%） |
+| mem_usage | NUMERIC(20,4) | 内存使用率（%） |
 | region | TEXT | Region ID |
 | region_name | TEXT | Region 中文名 |
 | community | TEXT | 所属社区 |
