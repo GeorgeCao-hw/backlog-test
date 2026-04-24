@@ -59,13 +59,23 @@
 * **测试结果**： Passed
 * **用例链接**：https://devcloud.cn-north-4.huaweicloud.com/cloudtestportal/project/2dbb0ac504234de39d622fdbcf814cf3/testsuite?branch_id=vd1k000117ahg0nk&testplan_id=vd1j00011b8o7tbb
 
+**5.输入正确的密码和错误的验证码，会提示用户验证码输入有误**
+
+* **对应task(issueID)链接: https://github.com/opensourceways/backlog/issues/45
+* **测试步骤**:
+  1. 使用账号登录，输入错误一次密码；
+  2. 输入正确的密码，再输入错误的验证码，点击登录
+* **预期结果**: 提示用户验证码输入有误
+* **测试结果**： Passed
+* **用例链接**：https://devcloud.cn-north-4.huaweicloud.com/cloudtestportal/project/2dbb0ac504234de39d622fdbcf814cf3/testsuite?branch_id=vd1k000117ahg0nk&testplan_id=vd1j00011b8o7tbb
+
 ---
 
 ## 3. 测试结果汇总表
 
 | 测试维度          | 用例总数   | 重点测试点描述             | 通过数    | 不通过数   | 结论 (Pass/Fail) |
 |---------------|--------|---------------------|--------|--------|----------------|
-| **功能测试**      | 4 | 覆盖核心业务逻辑与 API 契约。   | 4 | 0 | 通过         |
+| **功能测试**      | 5 | 覆盖核心业务逻辑与 API 契约。   | 5 | 0 | 通过         |
 
 ---
 
