@@ -418,7 +418,7 @@ graph TB
 
 | 字段名 | 类型 | 说明 |
 |---|---|---|
-| uuid | TEXT PRIMARY KEY | account_name_res_instance_id_metric_id_timestamp_tag_key |
+| uuid | TEXT PRIMARY KEY | md5(account_name || res_instance_id || metric_id || timestamp || tag_key) |
 | community | TEXT | 所属社区（从标签 value 提取） |
 | account_name | TEXT | 账号名 |
 | service_name | TEXT | 服务名 |
