@@ -27,6 +27,7 @@
   1. 使用账号登录，输入错误一次密码，查看是否会有验证码出现。
 * **预期结果**: 输入错误一次密码，密码下方增加验证码输入框
 * **测试结果**： Passed
+* **用例链接**：https://devcloud.cn-north-4.huaweicloud.com/cloudtestportal/project/2dbb0ac504234de39d622fdbcf814cf3/testsuite?branch_id=vd1k000117ahg0nk&testplan_id=vd1j00011b8o7tbb
 
 **2.验证码刷新功能正常**
 
@@ -36,6 +37,7 @@
   2. 验证码图片右方点击刷新按钮
 * **预期结果**: 验证码图片会刷新
 * **测试结果**： Passed
+* **用例链接**：https://devcloud.cn-north-4.huaweicloud.com/cloudtestportal/project/2dbb0ac504234de39d622fdbcf814cf3/testsuite?branch_id=vd1k000117ahg0nk&testplan_id=vd1j00011b8o7tbb
 
 **3.输入正确的密码和验证码，可以登录成功**
 
@@ -45,6 +47,7 @@
   2. 输入正确的密码，再输入正确的验证码，点击登录
 * **预期结果**: 能够正常登录进入页面
 * **测试结果**： Passed
+* **用例链接**：https://devcloud.cn-north-4.huaweicloud.com/cloudtestportal/project/2dbb0ac504234de39d622fdbcf814cf3/testsuite?branch_id=vd1k000117ahg0nk&testplan_id=vd1j00011b8o7tbb
 
 **4.输入错误的密码和正确的验证码，会提示用户错误次数后冻结账号**
 
@@ -54,6 +57,7 @@
   2. 输入错误的密码，再输入正确的验证码，点击登录
 * **预期结果**: 弹出提示框，提示还可以输入多少次密码后冻结账号
 * **测试结果**： Passed
+* **用例链接**：https://devcloud.cn-north-4.huaweicloud.com/cloudtestportal/project/2dbb0ac504234de39d622fdbcf814cf3/testsuite?branch_id=vd1k000117ahg0nk&testplan_id=vd1j00011b8o7tbb
 
 ---
 
