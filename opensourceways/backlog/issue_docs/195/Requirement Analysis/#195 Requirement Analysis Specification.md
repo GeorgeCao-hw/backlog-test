@@ -4,7 +4,7 @@
 
 * **需求链接**: https://github.com/opensourceways/backlog/issues/195
 * **需求名称**: euler多模态搜索以及联想功能优化
-* **开发责任人**: 2511689622
+* **开发责任人**: 谢承志
 
 ---
 
@@ -16,7 +16,7 @@
 
 **本次需求范围:**
 - 新增多模态搜索能力（图搜文）：用户上传错误截图，后端调用大模型分析图片提取关键词，再执行文档检索并返回结果
-- 新增图片上传接口：将图片存储至华为云 OBS，生成临时访问 URL 供大模型调用
+- 新增图片上传接口：接收前端上传的图片，**先调用第三方内容安全审核 API 进行图片审核，仅审核通过才存储到华为云 OBS**，生成临时访问 URL 供大模型调用
 - 新增搜索直达推荐接口：基于 Trie 前缀树，针对官网特定入口（如功能页、文档目录）提供跳转链接推荐
 - 优化联想词功能：使用 Trie 前缀匹配替代原有纯 ES Suggest 实现，提升前缀命中率，并在前缀无结果时回退至编辑距离纠错
 - 优化 word 接口匹配能力：`POST /search/word` 在 Trie 前缀匹配无结果时新增 ES wildcard 兜底查询（`*keyword*`），支持关键词出现在标题中间位置的场景，之前仅支持前缀匹配
@@ -34,7 +34,8 @@
 
 **验收标准:**
 
-- [x] **图片上传**：`POST /search/sort/upload/image` 接口可接收图片文件（≤10MB，仅 image/* 类型），成功上传至 OBS 并返回临时访问 URL
+- [x] **图片上传**：`POST /search/sort/upload/image` 接口可接收图片文件（≤10MB，仅 image/* 类型），**先审核后上传**，审核通过才存储到 OBS 并返回临时访问 URL；审核不通过直接返回错误
+- [x] **图片审核**：支持配置第三方内容安全审核服务（如华为云 Content Moderation），对违规图片（涉政、色情、暴力等）进行拦截；审核不通过不存储到 OBS，节省存储资源
 - [x] **多模态搜索**：`POST /search/multitimodal` 接口接收图片 URL 和查询条件，调用 Qwen3-VL 大模型分析后提取关键词，完成文档检索，响应时间满足 P90 < 15s
 - [x] **关键词提取**：大模型返回结构化 keywords JSON，包含 titleKeyword（用于检索标题）和 contentKeyword（用于检索正文），两者均不为空时判定为有效响应
 - [x] **用户补充关键词**：当用户同时提供 keyword 字段时，大模型 prompt 中融合用户关键词优化提取结果
@@ -55,10 +56,13 @@
 **逻辑方案：**
 
 **多模态搜索流程：**
-1. 前端调用 `POST /search/sort/upload/image`，`ObsService` 将图片上传至华为云 OBS，返回临时签名 URL
-2. 前端携带 imageUrl 调用 `POST /search/multitimodal`，`MultimodalService` 从配置文件读取 prompt，拼接图片 URL 构造多模态请求体，调用硅基 Qwen3-VL-32B-Instruct API
-3. 解析大模型返回的 JSON，提取 `keywords[0]`（titleKeyword）和 `keywords[1]`（contentKeyword），写入 `SearchCondition`
-4. 以 titleKeyword 作为关键词调用多路召回检索 `searchByConditionMulti`，返回文档列表及 imageUrl
+1. 前端调用 `POST /search/sort/upload/image`，上传图片文件到服务端
+2. 服务端接收图片后**先调用内容安全图片审核 API**：
+   - 审核通过：将图片上传至华为云 OBS，生成临时签名 URL 返回给前端
+   - 审核不通过：直接返回"图片包含违规内容"错误，不存储到 OBS
+3. 前端携带 imageUrl 调用 `POST /search/multitimodal`，`MultimodalService` 从配置文件读取 prompt，拼接图片 URL 构造多模态请求体，调用硅基 Qwen3-VL-32B-Instruct API
+4. 解析大模型返回的 JSON，提取 `keywords[0]`（titleKeyword）和 `keywords[1]`（contentKeyword），写入 `SearchCondition`
+5. 以 titleKeyword 作为关键词调用多路召回检索 `searchByConditionMulti`，返回文档列表及 imageUrl
 
 **联想词 / 搜索直达流程：**
 - `getSuggestion`：优先 Trie 前缀匹配（支持逐步截断最多3个字符后重试），无结果时 `suggestCorrection` 编辑距离纠错后再匹配，最终回退 ES Term Suggestion
@@ -78,10 +82,14 @@
 }}%%
 flowchart TD
     subgraph 多模态搜索
-        A[前端上传图片] -->|POST /search/sort/upload/image| B[ObsService]
-        B -->|上传图片| C[(华为云 OBS)]
-        C -->|返回 objectKey| B
-        B -->|generateImageUrl 临时签名| D[imageUrl]
+        A[前端上传图片] -->|POST /search/sort/upload/image| B[DivideController]
+        B -->|接收图片| S[ContentAuditService 图片内容审核]
+        S -->|审核通过| C[ObsService 上传图片]
+        C -->|存储到| O[(华为云 OBS)]
+        O -->|返回 objectKey| C
+        C --> D[生成临时签名 imageUrl]
+        D -->|返回 imageUrl| A
+        S -->|审核不通过| U[返回错误：图片含违规内容]
         D -->|POST /search/multitimodal| E[MultimodalService]
         E -->|读取 promptFile| F[prompt 文件]
         E -->|拼接 prompt + imageUrl| G[硅基 Qwen3-VL API]
@@ -112,12 +120,13 @@ flowchart TD
 | 任务 ID | 任务描述 (Task Description) | 预期产出 (Deliverables) | 预期工作量（人天） |
 |---------|---------------------------|-----------------------|-----------------|
 | **TASK1** | **OBS 服务集成** - 新增 `ObsConfig`、`ObsService`，实现图片上传和临时签名 URL 生成；引入华为云 OBS SDK 依赖 | `ObsConfig.java`、`ObsService.java`、`pom.xml` 更新 | **1** |
-| **TASK2** | **图片上传接口** - 在 `DivideController` 新增 `POST /search/sort/upload/image`，含文件类型和大小校验（≤10MB） | `DivideController.java`、`Constants.java` | **0.5** |
-| **TASK3** | **多模态服务开发** - 实现 `MultimodalService` / `MultimodalServiceImpl`，含 prompt 文件读取、Qwen3-VL API 调用、响应解析及关键词提取 | `MultimodalService.java`、`MultimodalServiceImpl.java`、prompt 配置文件 | **2** |
-| **TASK4** | **多模态搜索接口** - 在 `SearchController` 新增 `POST /search/multitimodal`，组合调用 MultimodalService 和 SearchService.searchByConditionMulti | `SearchController.java`、`SearchCondition.java`（新增 MultimodalGroup 校验组） | **0.5** |
-| **TASK5** | **Trie 前缀树优化 & word wildcard 兜底** - 增强 `Trie` 支持 `insert(word, path, type)` 和 `searchTopKWithPrefix`，`TrieNode` 增加 path/type 字段；`getSuggestion` 改造为前缀优先 + 编辑距离纠错回退；`findWord` 在 Trie 无结果时新增 ES wildcard（`*keyword*`）兜底，支持关键词中间位置匹配 | `Trie.java`、`TrieNode.java`、`SearchServiceImpl.java` | **1** |
-| **TASK6** | **搜索直达接口** - 实现 `findWebWord`，初始化 `webTrieMap` 载入官网直达词条，新增 `POST /search/webword` 接口 | `SearchService.java`、`SearchServiceImpl.java`、`SearchController.java` | **1** |
-| **TASK7** | **单元测试** - 覆盖 `MultimodalServiceImpl` 和 `ObsService` 关键路径（正常、API 异常、格式异常等） | `MultimodalServiceImplTest.java`、`ObsServiceTest.java` | **1** |
+| **TASK2** | **图片内容安全审核集成** - 新增 `ContentAuditService`，调用第三方内容审核 API（如华为云 Content Moderation），对上传图片进行违规内容检测；支持配置开关，默认开启审核 | `ContentAuditService.java`、`ContentAuditConfig.java`、`pom.xml` 更新 | **1** |
+| **TASK3** | **图片上传接口** - 在 `DivideController` 新增 `POST /search/sort/upload/image`，含文件类型和大小校验（≤10MB）；**先审核后上传**，审核通过才存储到 OBS，审核不通过直接返回错误 | `DivideController.java`、`Constants.java` | **0.5** |
+| **TASK4** | **多模态服务开发** - 实现 `MultimodalService` / `MultimodalServiceImpl`，含 prompt 文件读取、Qwen3-VL API 调用、响应解析及关键词提取 | `MultimodalService.java`、`MultimodalServiceImpl.java`、prompt 配置文件 | **2** |
+| **TASK5** | **多模态搜索接口** - 在 `SearchController` 新增 `POST /search/multitimodal`，组合调用 MultimodalService 和 SearchService.searchByConditionMulti | `SearchController.java`、`SearchCondition.java`（新增 MultimodalGroup 校验组） | **0.5** |
+| **TASK6** | **Trie 前缀树优化 & word wildcard 兜底** - 增强 `Trie` 支持 `insert(word, path, type)` 和 `searchTopKWithPrefix`，`TrieNode` 增加 path/type 字段；`getSuggestion` 改造为前缀优先 + 编辑距离纠错回退；`findWord` 在 Trie 无结果时新增 ES wildcard（`*keyword*`）兜底，支持关键词中间位置匹配 | `Trie.java`、`TrieNode.java`、`SearchServiceImpl.java` | **1** |
+| **TASK7** | **搜索直达接口** - 实现 `findWebWord`，初始化 `webTrieMap` 载入官网直达词条，新增 `POST /search/webword` 接口 | `SearchService.java`、`SearchServiceImpl.java`、`SearchController.java` | **1** |
+| **TASK8** | **单元测试** - 覆盖 `MultimodalServiceImpl`、`ObsService` 和 `ContentAuditService` 关键路径（正常、API 异常、格式异常、违规图片等） | `MultimodalServiceImplTest.java`、`ObsServiceTest.java`、`ContentAuditServiceTest.java` | **1** |
 
 ---
 
@@ -131,13 +140,15 @@ flowchart TD
 
 * [ ] **边界变更**：新增公网端口、修改防火墙规则、变更网关配置。
 * [x] **凭证处理**：涉及密钥（Secret/Key）、Token、证书的存储或分发。
-  * **原因**：TASK1/TASK3 涉及华为云 OBS AK/SK 和硅基大模型 Token 的配置与使用，需要安全存储凭证，防止泄露。
+  * **原因**：TASK1 华为云 OBS AK/SK、TASK2 内容安全审核 AK/SK、TASK4 硅基大模型 Token 的配置与使用，需要安全存储凭证，防止泄露。
 * [ ] **权限调整**：修改权限模型、服务账号（SA）权限或鉴权逻辑。
 * [x] **供应链**：引入新的第三方二进制文件、SDK 或重大版本依赖升级。
-  * **原因**：TASK1 引入华为云 OBS Java SDK 作为新三方依赖，需评估供应链安全。
+  * **原因**：TASK1 引入华为云 OBS Java SDK、TASK2 引入华为云内容审核 SDK，均为新增三方依赖，需评估供应链安全。
 * [ ] **隐私风险评估**：涉及用户个人数据（Email、手机号、IP、邮箱等）的处理。
 * [x] **AI 使用**：涉及 AIGC 能力应用，并提供服务。
-  * **原因**：TASK3 集成硅基 Qwen3-VL-32B-Instruct 多模态大模型，属于 AIGC 能力对外提供服务。
+  * **原因**：TASK4 集成硅基 Qwen3-VL-32B-Instruct 多模态大模型，属于 AIGC 能力对外提供服务。
+* [x] **内容安全**：用户上传用户生成内容（UGC）需要内容审核。
+  * **原因**：新增用户上传图片功能，必须进行内容安全审核以拦截违规内容（涉政、色情、暴力等），符合安全相关性要求。
 
 ### B. 架构设计相关性分析
 
@@ -146,9 +157,9 @@ flowchart TD
 * [x] A 环节判定需要完成安全设计。
 * [ ] 改变了现有系统的物理/逻辑拓扑。
 * [x] **新增或大幅修改对外暴露的 API/CLI 接口**。
-  * **原因**：TASK2 新增 `POST /search/sort/upload/image`，TASK4 新增 `POST /search/multitimodal`，TASK6 新增 `POST /search/webword`，共3个新对外接口。
+  * **原因**：TASK3 新增 `POST /search/sort/upload/image`，TASK5 新增 `POST /search/multitimodal`，TASK7 新增 `POST /search/webword`，共3个新对外接口。
 * [x] **引入了新的中间件、数据库或三方核心组件**。
-  * **原因**：TASK1 引入华为云 OBS 对象存储；TASK3 集成第三方大模型推理服务（硅基/SiliconFlow），均为新引入的核心外部依赖。
+  * **原因**：TASK1 引入华为云 OBS 对象存储；TASK2 引入华为云内容安全审核服务；TASK4 集成第三方大模型推理服务（硅基/SiliconFlow），均为新引入的核心外部依赖。
 
 ### C. 系统集成测试相关性分析
 
@@ -194,11 +205,11 @@ flowchart TD
 | **优先级** | 该需求优先级评估（高/中/低）？ | **中** - 图搜文解决了开发者截图报错无法搜索的痛点，联想优化属于体验提升，整体优先级中等 |
 | **通用性** | 该需求是否解决 3 个以上业务方的共性痛点？ | **是** - openEuler 社区所有通过官网搜索寻找文档、报错解决方案的开发者均受益 |
 | **必要性** | 现有组件通过配置变更是否无法实现目标或没有不用开发的替代方案？ | **是** - 多模态图搜文需要新增大模型调用和 OBS 集成，联想优化需要 Trie 结构重构，均无法通过简单配置实现 |
-| **工作量** | 预计总工作量 | **7 人天** |
+| **工作量** | 预计总工作量 | **8 人天** |
 | **价值评估** | 实现后能减少多少手动操作或提升多少系统稳定性？ | 开发者遇到报错截图时无需手动提取关键词，直接上图即可找到解决方案；联想词前缀命中率提升，减少用户无效查询次数 |
 
 > **状态定义：** **Accept (准入)** | **Reject (驳回)** | **Pending (待议)**
 
 **建议结论**：**Accept**
 
-**原因描述：** 该需求通过引入多模态大模型能力，填补了 openEuler 搜索对图片类报错场景的覆盖空白，同时 Trie 前缀优化和搜索直达功能显著提升联想推荐的精度和实用性。技术方案依托已有 EasySearch 服务扩展，主要新增 OBS 集成与大模型调用两个外部依赖，工作量可控（7 人天），建议准入。
+**原因描述：** 该需求通过引入多模态大模型能力，填补了 openEuler 搜索对图片类报错场景的覆盖空白，同时增加内容安全审核保证用户上传图片合规性，Trie 前缀优化和搜索直达功能显著提升联想推荐的精度和实用性。技术方案依托已有 EasySearch 服务扩展，主要新增 OBS 集成、内容审核、大模型调用三个外部依赖，工作量可控（8 人天），建议准入。
