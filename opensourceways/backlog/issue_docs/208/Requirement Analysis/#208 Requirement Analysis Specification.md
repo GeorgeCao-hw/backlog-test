@@ -61,41 +61,8 @@ EasySearch 采用多数据源适配架构，每个数据源独立实现 `*Gatewa
 2. 新增 DO 层：`HifloatDo` 定义 ES 文档字段映射
 3. 新增 VO 层：`HifloatVo` 定义返回给前端的视图对象
 4. 新增 Gateway 接口：`HifloatGateway` 定义搜索能力
-5. 基础设施实现：`HifloatGatewayImpl` 继承 `BaseFounctionGateway`，复用基类默认实现，只需要覆盖自定义逻辑
+5. 基础设施实现：`HifloatGatewayImpl` 继承 `BaseFunctionGateway`，复用基类默认实现，只需要覆盖自定义逻辑
 6. 在 `SearchAdapter` 所有路由方法中新增 hifloat 分支
-
-**流程图：**
-
-```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#4caf50',
-    'primaryBorderColor': '#2e7d32',
-    'primaryTextColor': '#ffffff',
-    'fontSize': '14px'
-  }
-}}%%
-flowchart TD
-    A[前端搜索请求] --> B[SearchAdapter]
-    B -->|dataSource = hifloat| C[HifloatGateway]
-    C --> D[Docs search: searchByCondition]
-    C --> E[Count: getSearchCountByCondition]
-    C --> F[Sugg: getSuggByCondition]
-    C --> G[Word: getWordByConditon]
-    C --> H[Tags: getSearchTagsByCondition]
-    C --> I[Sort: getDvideSearchSortByCondition]
-    C --> J[Divide: searchDocByType]
-    C --> K[Hotwords: getHotwords]
-    D --> L[(Elasticsearch index: hifloat-zh/en)]
-    E --> L
-    F --> L
-    G --> L
-    H --> L
-    I --> L
-    J --> L
-    L --> M[返回结果给前端]
-```
 
 ### 4.2 任务清单
 
@@ -107,7 +74,7 @@ flowchart TD
 | **TASK2** | **DTO 条件类新增** - 新增 `DocsHifloatCondition`、`SortHifloatCondition`、`SuggHifloatCondition`、`TagsHifloatCondition`、`WordHifloatCondition` 共5个条件类 | `domain/hifloat/dto/` 下5个文件 | **0.5** |
 | **TASK3** | **DO & VO 定义** - 新增 `HifloatDo` (ES 数据对象) 和 `HifloatVo` (前端视图对象) | `HifloatDo.java`、`HifloatVo.java` | **0.3** |
 | **TASK4** | **Gateway 接口定义** - 新增 `HifloatGateway` 接口，继承基础接口定义 | `HifloatGateway.java` | **0.2** |
-| **TASK5** | **Gateway 实现** - 新增 `HifloatGatewayImpl` 继承 `BaseFounctionGateway`，实现所有接口方法；包含 Trie 前缀联想、热点词配置读取逻辑 | `HifloatGatewayImpl.java` | **1.5** |
+| **TASK5** | **Gateway 实现** - 新增 `HifloatGatewayImpl` 继承 `BaseFunctionGateway`，实现所有接口方法；包含 Trie 前缀联想、热点词配置读取逻辑 | `HifloatGatewayImpl.java` | **1.5** |
 | **TASK6** | **SearchAdapter 路由适配** - 在 `SearchAdapter` 所有搜索方法新增 `SOURCE_HIFLOAT` 分支路由 | `SearchAdapter.java` | **0.3** |
 | **TASK7** | **单元测试** - 编写 `HifloatGatewayImplTest` 覆盖核心搜索路径 | `HifloatGatewayImplTest.java` | **0.5** |
 
