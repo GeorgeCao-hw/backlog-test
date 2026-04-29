@@ -26,12 +26,12 @@
 
 **验收标准:**
 
-- [x] openUBMC 社区邮件列表数据可被正常采集，邮件归档链接格式正确（`https://mailweb.openubmc.cn/archives/list/{list_name}/thread/{message_id_hash}`）
-- [x] MindSpore 社区邮件列表数据可被正常采集，邮件归档链接格式正确（`https://mailweb.mindspore.cn/archives/list/{list_name}/thread/{message_id_hash}`）
-- [x] openUBMC 邮件清洗器可正确过滤例会、公告、纪要、会议通知、转测试等非问题类邮件
-- [x] MindSpore 邮件清洗器可正确过滤例会、开源实习、测试任务、教程、CVE、会议通知等非问题类邮件
-- [x] AI 总结 Prompt 配置正确加载，可对有效邮件内容生成中文摘要
-- [x] 新增 Collector 和 Cleaner 的单元测试通过，覆盖有效/无效邮件判定及工厂路由
+- [ ] openUBMC 社区邮件列表数据可被正常采集，邮件归档链接格式正确（`https://mailweb.openubmc.cn/archives/list/{list_name}/thread/{message_id_hash}`）
+- [ ] MindSpore 社区邮件列表数据可被正常采集，邮件归档链接格式正确（`https://mailweb.mindspore.cn/archives/list/{list_name}/thread/{message_id_hash}`）
+- [ ] openUBMC 邮件清洗器可正确过滤例会、公告、纪要、会议通知、转测试等非问题类邮件
+- [ ] MindSpore 邮件清洗器可正确过滤例会、开源实习、测试任务、教程、CVE、会议通知等非问题类邮件
+- [ ] AI 总结 Prompt 配置正确加载，可对有效邮件内容生成中文摘要
+- [ ] 新增 Collector 和 Cleaner 的单元测试通过，覆盖有效/无效邮件判定及工厂路由
 
 ---
 
@@ -92,7 +92,7 @@ flowchart LR
 | **task2 _#207_** | **实现 openUBMC 和 MindSpore 邮件 Cleaner（含过滤规则和 AI Prompt）** | clean.py 新增类、conf.yaml 新增配置、settings.py 新增字段 | **1** |
 | **task3 _#207_** | **在 main.py 中注册两个社区的 mail 数据源** | main.py 采集管线配置 | **0.25** |
 | **task4 _#207_** | **编写 Collector 和 Cleaner 单元测试** | test_collector.py、test_clean.py 新增测试类 | **1** |
-| **task5 _后续#** | **CANN、Mind系列、BoostKit、HPCKit、HiFloat 社区邮件数据源接入** | 按社区分批提交 PR | **3** |
+| **task5 _后续_** | **CANN、Mind系列、BoostKit、HPCKit、HiFloat 社区邮件数据源接入** | 按社区分批提交 PR | **3** |
 
 ---
 
