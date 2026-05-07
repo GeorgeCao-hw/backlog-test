@@ -4,7 +4,7 @@
 
 * **需求链接**: https://github.com/opensourceways/backlog/issues/169
 * **需求名称**: Ascend-Mind 系列 resolved issue 用户回复后自动移除 resolved 标签
-* **开发责任人**: **[TODO]**
+* **开发责任人**: chenqi
 
 ---
 

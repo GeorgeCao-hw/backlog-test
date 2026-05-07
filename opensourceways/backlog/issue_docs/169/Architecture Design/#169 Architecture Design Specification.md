@@ -6,7 +6,7 @@
 
 * **需求链接**: https://github.com/opensourceways/backlog/issues/169
 * **需求名称**: Ascend-Mind 系列 resolved issue 用户回复后自动移除 resolved 标签（含 AI 语义判定）
-* **开发责任人**: **[TODO]**
+* **开发责任人**: chenqi
 * **设计目标**: 在现有 `robot-issue-manage` 项目基础上，扩展 Webhook 事件监听支持 issue 评论事件，新增 AI 语义判断 Agent 判断用户回复意图，实现 resolved 标签智能管理。
 * **目标仓库**: `robot-issue-manage`
 
@@ -415,7 +415,7 @@ T0+30s: Polling 扫描 → 获取评论列表 → 包含该评论 → 调用 LLM
 | 任务 ID | 可服务性任务描述 | 责任人 |
 |---------|----------------|--------|
 | **OPS-TASK1** | 在 `_process_note_event` 中记录 Agent 调用结果到审计日志 | **[DONE]** 证据：`webhook/handlers.py:387-415` (`_log_intent_result` 方法) |
-| **OPS-TASK2** | 新增错误码 `INTENT_CLASSIFICATION_LOW_CONFIDENCE` 用于低置信度场景 | [TODO] 待实现 |
+| **OPS-TASK2** | 新增错误码 `INTENT_CLASSIFICATION_LOW_CONFIDENCE` 用于低置信度场景 | **[DONE]** 证据：`core/constants.py:8-10` (错误码常量定义), `webhook/handlers.py:375` (使用错误码) |
 
 ### 3.4 性能与伸缩性评估和设计
 

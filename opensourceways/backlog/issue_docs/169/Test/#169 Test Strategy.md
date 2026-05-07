@@ -6,8 +6,8 @@
 * **需求名称**: Ascend-Mind 系列 resolved issue 用户回复后自动移除 resolved 标签（含 AI 语义判定）
 * **核心目标**:
   验证 Webhook note 事件处理、AI 语义判断 Agent、标签操作的正确性，以及架构设计中定义的安全与隐私专项任务的闭环验收。
-* **开发责任人**: **[TODO]**
-* **测试责任人**: **[TODO]**
+* **开发责任人**: chenqi
+* **测试责任人**: chenqi
 * **目标仓库**: `robot-issue-manage`
 
 ---
