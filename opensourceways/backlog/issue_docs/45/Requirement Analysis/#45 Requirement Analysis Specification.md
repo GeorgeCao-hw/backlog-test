@@ -4,7 +4,7 @@
 
 * **需求链接**: https://github.com/opensourceways/backlog/issues/45
 * **需求名称**: 社区管理员登录增加图形验证码功能
-* **开发责任人**: 待定
+* **开发责任人**: 张扬
 
 ---
 
@@ -34,18 +34,20 @@
 ### 4.1 核心逻辑方案
 
 **逻辑方案:**
-1. 在登录服务中增加登录失败计数功能
-2. 达到阈值后，登录接口返回 need_captcha=true
-3. 新增验证码生成和验证接口，使用 Redis 存储
-4. 验证码错误时返回重试次数
+1. 在登录服务（signing/domain/loginservice/）中增加登录失败计数功能，记录失败次数到 Redis
+2. 达到阈值后，登录接口返回 need_captcha=true 及 retry_num，前端据此展示验证码输入框
+3. 新增验证码领域服务（signing/domain/captchaservice/）和基础设施实现（signing/infrastructure/captchaimpl/），生成图形验证码并存储到 Redis（带 TTL）
+4. 验证码校验采用 fail-closed 策略：Redis 故障时验证码校验返回失败（拒绝访问），而非放行
+5. 验证码参数（阈值、TTL、图片尺寸等）可从配置文件调整
+6. 登录成功后自动清除失败计数
 
 ### 4.2 任务清单
 
 | 任务 ID | 任务描述 | 预期产出 | 预期工作量 |
 |---------|---------|---------|-----------|
-| TASK1 | 新增验证码服务 (signing/domain/captchaservice/, signing/infrastructure/captchaimpl/) | 验证码生成和验证逻辑 | - |
-| TASK2 | 登录失败计数和验证码触发逻辑 (signing/domain/login.go, signing/domain/loginservice/service.go) | 登录接口返回 need_captcha 和 retry_num | - |
-| TASK3 | 验证码配置可调整 | 配置文件支持参数调整 | - |
+| TASK1 | 新增验证码领域服务与基础设施实现（captchaservice + captchaimpl），包含 Redis 存储、图片生成、fail-closed 策略 | 验证码生成（GET /captcha）和校验接口 | 3d |
+| TASK2 | 登录失败计数与验证码触发逻辑（signing/domain/login.go、loginservice/service.go），login 接口返回 need_captcha 和 retry_num | 登录接口增强，失败计数与清除逻辑 | 2d |
+| TASK3 | 验证码相关配置项（失败阈值、TTL、图片参数）+ 路由参数常量提取 + 安全加固 | 配置文件可调整，硬编码字符串替换为常量 | 1d |
 
 ---
 
@@ -60,17 +62,17 @@
 * [ ] AI使用
 
 ### B. 架构设计相关性分析
-* [ ] A环节判定需要完成安全设计
-* [ ] 改变现有系统拓扑
-* [ ] 新增对外暴露的 API
+* [x] **A环节判定需要完成安全设计**：涉及凭证处理，需进行威胁建模和安全设计
+* [x] **改变现有系统拓扑**：signing 模块内新增 captcha 子域服务，登录流程新增 Redis 验证码存储依赖
+* [x] **新增对外暴露的 API**：新增验证码生成接口 GET /captcha
 * [ ] 引入新的中间件
 
 ### C. 系统集成测试相关性分析
-* [ ] A/B 环节判定需要安全/架构设计
+* [x] **A/B 环节判定需要安全/架构设计**：A 环节触发 need_security，B 环节触发 need_design，需集成测试验证安全机制
 * [ ] 跨组件影响
 * [ ] 核心组件管控
-* [ ] 环境强依赖
-* [ ] 端到端流程
+* [x] **环境强依赖**：验证码存储依赖 Redis，需验证 Redis 故障时 fail-closed 行为
+* [x] **端到端流程**：涉及 获取验证码 → 登录失败触发 → 携带验证码登录 的完整链路
 
 ### D. 用户体验相关性分析
 * [ ] 交互逻辑变更
@@ -79,11 +81,11 @@
 * [ ] 无障碍与多语种
 
 ### 5.1 需求相关性分析汇总结果
-* [ ] need_security
-* [ ] need_design
-* [ ] need_itest
+* [x] need_security
+* [x] need_design
+* [x] need_itest
 * [ ] need_ux
-* [x] need_light
+* [ ] need_light
 
 ---
 
@@ -96,7 +98,7 @@
 | 优先级 | 该需求优先级评估？ | 高，涉及安全风险 |
 | 通用性 | 是否解决多个业务方共性痛点？ | 是，所有管理员登录均受保护 |
 | 必要性 | 是否必须通过开发实现？ | 是，当前无验证码机制 |
-| 工作量 | 预计总工作量？ | 待评估 |
+| 工作量 | 预计总工作量？ | 约 6d（TASK1: 3d + TASK2: 2d + TASK3: 1d） |
 | 价值评估 | 实现后能提升多少安全性？ | 防止暴力破解，提升系统安全防护能力 |
 
 **建议结论**：**Accept**
