@@ -1,0 +1,53 @@
+# 监听本仓 issue 评论，命中 `[小数需求分析]` 关键字时通过 repository_dispatch
+# 把事件转发到 opensourceways/om-datacenter 的 issue-analyzer.yml workflow。
+#
+# 前置：本仓 Secrets → Actions 需配置 DATACENTER_DISPATCH_TOKEN（PAT，权限范围
+# 见 https://github.com/opensourceways/om-datacenter/blob/main/docs/external-workflows/README.md）
+
+name: Forward issue comment to om-datacenter (analyze trigger)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  forward:
+    if: |
+      github.event.issue.state == 'open' &&
+      contains(github.event.comment.body, '[小数需求分析]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send repository_dispatch to om-datacenter
+        env:
+          GH_TOKEN: ${{ secrets.DATACENTER_DISPATCH_TOKEN }}
+        run: |
+          cat > /tmp/dispatch.json <<'EOF'
+          {
+            "event_type": "backlog_analyze",
+            "client_payload": {
+              "source_repo": ${{ toJSON(github.repository) }},
+              "issue_number": ${{ github.event.issue.number }},
+              "issue_title": ${{ toJSON(github.event.issue.title) }},
+              "comment_id": ${{ github.event.comment.id }},
+              "comment_body": ${{ toJSON(github.event.comment.body) }},
+              "trigger_user": ${{ toJSON(github.event.comment.user.login) }}
+            }
+          }
+          EOF
+
+          gh api \
+            -X POST \
+            /repos/opensourceways/om-datacenter/dispatches \
+            --input /tmp/dispatch.json
+
+      - name: Comment back on backlog issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --body "🚀 已触发 om-datacenter 需求分析流程，结果会回评在本 issue。"
