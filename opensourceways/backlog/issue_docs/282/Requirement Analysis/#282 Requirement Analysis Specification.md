@@ -31,7 +31,7 @@
 - [ ] Issue 状态变更为 `VALIDATION` 时，Bot 在 60s 内自动添加 `resolved` label
 - [ ] Issue 状态变更为 `DONE` 时，Bot 在 60s 内自动添加 `resolved` label
 - [ ] 其他状态变更（TODO/ACCEPTED/WIP/REJECTED）不触发 Bot 打标行为
-- [ ] 统计看板中可查询到 Gitcode Issue 状态字段数据，数据与 Gitcode 侧一致
+- [ ] 统计看板中可查询到 Gitcode Issue 状态字段数据，数据在 1 小时内与 Gitcode 侧达成最终一致
 
 ---
 
