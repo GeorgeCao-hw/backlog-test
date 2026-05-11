@@ -43,7 +43,7 @@
 
 **逻辑方案:**
 
-Bot 通过监听 Gitcode Issue 的 Webhook 事件（issue 状态变更），提取 Issue 当前状态字段；若状态为 `VALIDATION` 或 `DONE`，则调用 Gitcode API 为该 Issue 添加 `resolved` label。统计看板侧新增对 Gitcode Issue 状态字段的数据采集，存储至现有数据表并对外暴露查询能力。
+Bot 通过监听 Gitcode Issue 的 Webhook 事件（issue 状态变更），提取 Issue 当前状态字段；若状态为 VALIDATION 或 DONE 且该 Issue 尚未标记 resolved label，则调用 Gitcode API 为其添加标签。统计看板侧新增对 Gitcode Issue 状态字段的数据采集，存储至现有数据表并对外暴露查询能力。
 
 ```mermaid
 %%{init: {
