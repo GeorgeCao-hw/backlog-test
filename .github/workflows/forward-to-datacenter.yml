@@ -1,7 +1,7 @@
 # 把本仓的需求 issue 接进「数据中台 AI 流水线」（跑在 opensourceways/om-datacenter）。
 #
 # 两件事：
-#  1) issue 同时具备 `accept` 标签 + 含 `[数据中台需求]` 的评论时 → 在 issue 下贴一条「可用命令菜单」
+#  1) issue 同时具备 `accepted` 标签 + 含 `[数据中台需求]` 的评论时 → 在 issue 下贴一条「可用命令菜单」
 #     （说明 [小数需求分析] / [小数需求实现] / [小数需求上线] 各干什么）。
 #  2) issue 评论命中触发词时 → 通过 repository_dispatch 把事件转发到 om-datacenter 的对应 workflow：
 #       [小数需求分析]/[数据中台需求分析]            → backlog_analyze   （issue-1：写需求分析说明书 PR 到本仓）
@@ -29,7 +29,7 @@ jobs:
   menu:
     if: |
       (github.event_name == 'issue_comment' && github.event.issue.state == 'open' && contains(github.event.comment.body, '[数据中台需求]')) ||
-      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'accept' && github.event.issue.state == 'open')
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'accepted' && github.event.issue.state == 'open')
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
@@ -37,10 +37,10 @@ jobs:
       ISSUE: ${{ github.event.issue.number }}
       EVENT_NAME: ${{ github.event_name }}
     steps:
-      - name: Post 数据中台命令菜单（满足 accept 标签 + [数据中台需求] 评论 两个条件时）
+      - name: Post 数据中台命令菜单（满足 accepted 标签 + [数据中台需求] 评论 两个条件时）
         run: |
           DATA="$(gh issue view "$ISSUE" --json labels,comments)"
-          HAS_LABEL=no;  echo "$DATA" | jq -r '.labels[]?.name' | grep -qx 'accept'              && HAS_LABEL=yes
+          HAS_LABEL=no;  echo "$DATA" | jq -r '.labels[]?.name' | grep -qx 'accepted'              && HAS_LABEL=yes
           HAS_REQ=no;    echo "$DATA" | jq -r '.comments[]?.body' | grep -qF '[数据中台需求]'    && HAS_REQ=yes
           ALREADY=no;    echo "$DATA" | jq -r '.comments[]?.body' | grep -qF '<!-- DATACENTER_MENU -->' && ALREADY=yes
           # issue_comment 事件触发本 job 时，触发评论本身就含 [数据中台需求]（见 if:），直接当成 yes
@@ -52,7 +52,7 @@ jobs:
               echo '<!-- DATACENTER_MENU -->'
               echo '## 🤖 数据中台需求 — 可用命令'
               echo ''
-              echo '这个需求已 `accept`，可由「数据中台 AI 流水线」按下面三步推进。**直接在本 issue 评论触发词**即可（触发词放评论第一行；后面可换行写补充说明）：'
+              echo '这个需求已 `accepted`，可由「数据中台 AI 流水线」按下面三步推进。**直接在本 issue 评论触发词**即可（触发词放评论第一行；后面可换行写补充说明）：'
               echo ''
               echo '| 评论 | 干什么 |'
               echo '|------|--------|'
