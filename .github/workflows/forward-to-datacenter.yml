@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}   # menu job 不 checkout，gh 没法从 .git 推断仓库，必须显式给
       ISSUE: ${{ github.event.issue.number }}
       EVENT_NAME: ${{ github.event_name }}
     steps:
@@ -64,7 +65,7 @@ jobs:
             } > /tmp/menu.md
             gh issue comment "$ISSUE" --body-file /tmp/menu.md
           elif [ "$EVENT_NAME" = "issue_comment" ] && [ "$HAS_LABEL" != "yes" ]; then
-            gh issue comment "$ISSUE" --body "ℹ️ 收到 \`[数据中台需求]\`，但本 issue 还没打 \`accept\` 标签。请先让 maintainer 给该 issue 打 \`accept\` —— 打完标签后我会自动贴出可用命令菜单（也可届时再评论一次 \`[数据中台需求]\`）。"
+            gh issue comment "$ISSUE" --body "ℹ️ 收到 \`[数据中台需求]\`，但本 issue 还没打 \`accepted\` 标签。请先让 maintainer 给该 issue 打 \`accepted\` —— 打完标签后我会自动贴出可用命令菜单（也可届时再评论一次 \`[数据中台需求]\`）。"
           fi
 
   # ─── 2) 把触发词评论转发到 om-datacenter ─────────────────────────────────────────
@@ -82,6 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
+      GH_REPO: ${{ github.repository }}   # 不 checkout，gh issue comment 需要显式仓库
       EVENT_TYPE: >-
         ${{
           (startsWith(github.event.comment.body, '[小数需求分析]') || startsWith(github.event.comment.body, '[数据中台需求分析]')) && 'backlog_analyze' ||
