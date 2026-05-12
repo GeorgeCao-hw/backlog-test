@@ -1,34 +1,104 @@
-# 监听本仓 issue 评论，命中 `[小数需求分析]` 关键字时通过 repository_dispatch
-# 把事件转发到 opensourceways/om-datacenter 的 issue-analyzer.yml workflow。
+# 把本仓的需求 issue 接进「数据中台 AI 流水线」（跑在 opensourceways/om-datacenter）。
 #
-# 前置：本仓 Secrets → Actions 需配置 DATACENTER_DISPATCH_TOKEN（PAT，权限范围
-# 见 https://github.com/opensourceways/om-datacenter/blob/main/docs/external-workflows/README.md）
+# 两件事：
+#  1) issue 同时具备 `accept` 标签 + 含 `[数据中台需求]` 的评论时 → 在 issue 下贴一条「可用命令菜单」
+#     （说明 [小数需求分析] / [小数需求实现] / [小数需求上线] 各干什么）。
+#  2) issue 评论命中触发词时 → 通过 repository_dispatch 把事件转发到 om-datacenter 的对应 workflow：
+#       [小数需求分析]/[数据中台需求分析]            → backlog_analyze   （issue-1：写需求分析说明书 PR 到本仓）
+#       [小数需求实现]/[数据中台需求实现]            → backlog_implement （issue-2：多 agent 对抗开发 + 预览）
+#       [小数需求上线]/[小数合入上线]/[数据中台合入上线] → backlog_merge     （issue-3：白名单门禁 → 合入 + 上线 beta）
+#
+# 前置：本仓 Secrets → Actions 需配置 DATACENTER_DISPATCH_TOKEN（PAT，对 opensourceways/om-datacenter 有 `repo`
+#       或 `contents: write`；fine-grained 还要 `metadata: read`）。详见
+#       https://github.com/opensourceways/om-datacenter/blob/main/docs/external-workflows/README.md
 
-name: Forward issue comment to om-datacenter (analyze trigger)
+name: Forward to om-datacenter (数据中台需求菜单 + 转发触发)
 
 on:
   issue_comment:
     types: [created]
+  issues:
+    types: [labeled]
 
 permissions:
   contents: read
   issues: write
 
 jobs:
-  forward:
+  # ─── 1) 贴「数据中台需求」命令菜单 ───────────────────────────────────────────────
+  menu:
     if: |
-      github.event.issue.state == 'open' &&
-      contains(github.event.comment.body, '[小数需求分析]')
+      (github.event_name == 'issue_comment' && github.event.issue.state == 'open' && contains(github.event.comment.body, '[数据中台需求]')) ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'accept' && github.event.issue.state == 'open')
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE: ${{ github.event.issue.number }}
+      EVENT_NAME: ${{ github.event_name }}
+    steps:
+      - name: Post 数据中台命令菜单（满足 accept 标签 + [数据中台需求] 评论 两个条件时）
+        run: |
+          DATA="$(gh issue view "$ISSUE" --json labels,comments)"
+          HAS_LABEL=no;  echo "$DATA" | jq -r '.labels[]?.name' | grep -qx 'accept'              && HAS_LABEL=yes
+          HAS_REQ=no;    echo "$DATA" | jq -r '.comments[]?.body' | grep -qF '[数据中台需求]'    && HAS_REQ=yes
+          ALREADY=no;    echo "$DATA" | jq -r '.comments[]?.body' | grep -qF '<!-- DATACENTER_MENU -->' && ALREADY=yes
+          # issue_comment 事件触发本 job 时，触发评论本身就含 [数据中台需求]（见 if:），直接当成 yes
+          [ "$EVENT_NAME" = "issue_comment" ] && HAS_REQ=yes
+
+          if [ "$HAS_LABEL" = "yes" ] && [ "$HAS_REQ" = "yes" ]; then
+            if [ "$ALREADY" = "yes" ]; then echo "菜单已贴过，跳过"; exit 0; fi
+            {
+              echo '<!-- DATACENTER_MENU -->'
+              echo '## 🤖 数据中台需求 — 可用命令'
+              echo ''
+              echo '这个需求已 `accept`，可由「数据中台 AI 流水线」按下面三步推进。**直接在本 issue 评论触发词**即可（触发词放评论第一行；后面可换行写补充说明）：'
+              echo ''
+              echo '| 评论 | 干什么 |'
+              echo '|------|--------|'
+              echo '| `[小数需求分析]` | AI 按 backlog 规范写一份「需求分析说明书」，提 PR 到本仓（`opensourceways/<repo>/issue_docs/<本 issue 号>/Requirement Analysis/`，分支 `issue-<N>-design-docs`），**等人评审合入**。想重写就再评 `[小数需求分析] 你的补充意见`。 |'
+              echo '| `[小数需求实现]` | 需求分析说明书 PR 合入后再评这个。AI 多 agent 对抗开发（design → dev → 起预览 → review → tester），改对应仓、开 PR、回评预览地址。对预览不满意 → 再评 `[小数需求实现]`，换行写「要做的改动」，二轮在原分支上接着改。 |'
+              echo '| `[小数需求上线]` | 看预览满意后评这个（**仅白名单 maintainer 能真合入**；先评 `[小数需求上线] [DRY_RUN]` 只跑门禁不合入）。合入相关 PR + 上线 beta + 清理预览资源。 |'
+              echo ''
+              echo '> 这套流水线跑在 `opensourceways/om-datacenter`，所有进展会回评在本 issue。'
+            } > /tmp/menu.md
+            gh issue comment "$ISSUE" --body-file /tmp/menu.md
+          elif [ "$EVENT_NAME" = "issue_comment" ] && [ "$HAS_LABEL" != "yes" ]; then
+            gh issue comment "$ISSUE" --body "ℹ️ 收到 \`[数据中台需求]\`，但本 issue 还没打 \`accept\` 标签。请先让 maintainer 给该 issue 打 \`accept\` —— 打完标签后我会自动贴出可用命令菜单（也可届时再评论一次 \`[数据中台需求]\`）。"
+          fi
+
+  # ─── 2) 把触发词评论转发到 om-datacenter ─────────────────────────────────────────
+  forward:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.state == 'open' &&
+      (startsWith(github.event.comment.body, '[小数需求分析]') ||
+       startsWith(github.event.comment.body, '[数据中台需求分析]') ||
+       startsWith(github.event.comment.body, '[小数需求实现]') ||
+       startsWith(github.event.comment.body, '[数据中台需求实现]') ||
+       startsWith(github.event.comment.body, '[小数需求上线]') ||
+       startsWith(github.event.comment.body, '[小数合入上线]') ||
+       startsWith(github.event.comment.body, '[数据中台合入上线]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      EVENT_TYPE: >-
+        ${{
+          (startsWith(github.event.comment.body, '[小数需求分析]') || startsWith(github.event.comment.body, '[数据中台需求分析]')) && 'backlog_analyze' ||
+          (startsWith(github.event.comment.body, '[小数需求实现]') || startsWith(github.event.comment.body, '[数据中台需求实现]')) && 'backlog_implement' ||
+          (startsWith(github.event.comment.body, '[小数需求上线]') || startsWith(github.event.comment.body, '[小数合入上线]') || startsWith(github.event.comment.body, '[数据中台合入上线]')) && 'backlog_merge' ||
+          ''
+        }}
     steps:
       - name: Send repository_dispatch to om-datacenter
+        if: env.EVENT_TYPE != ''
         env:
           GH_TOKEN: ${{ secrets.DATACENTER_DISPATCH_TOKEN }}
         run: |
+          # 用 toJSON 安全转义标题 / 评论体（含中文 / 引号 / 换行 / $ / 反引号 都不会破坏 JSON 也不会被 shell 展开——'EOF' 是单引号）
           cat > /tmp/dispatch.json <<'EOF'
           {
-            "event_type": "backlog_analyze",
+            "event_type": "${{ env.EVENT_TYPE }}",
             "client_payload": {
               "source_repo": ${{ toJSON(github.repository) }},
               "issue_number": ${{ github.event.issue.number }},
@@ -39,15 +109,12 @@ jobs:
             }
           }
           EOF
-
-          gh api \
-            -X POST \
-            /repos/opensourceways/om-datacenter/dispatches \
-            --input /tmp/dispatch.json
+          gh api -X POST /repos/opensourceways/om-datacenter/dispatches --input /tmp/dispatch.json
 
       - name: Comment back on backlog issue
+        if: env.EVENT_TYPE != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue comment ${{ github.event.issue.number }} \
-            --body "🚀 已触发 om-datacenter 需求分析流程，结果会回评在本 issue。"
+            --body "🚀 已转发到数据中台流水线（\`${{ env.EVENT_TYPE }}\`，跑在 \`opensourceways/om-datacenter\`），进展会回评在本 issue。"
