@@ -1,10 +1,11 @@
 # 把本仓的需求 issue 接进「数据中台 AI 流水线」（跑在 opensourceways/om-datacenter）。
+# 多个来源仓（om-dataarts-deployment / backlog / ...）可以各放一份本 workflow，同时把事件派到 om-datacenter。
 #
 # 两件事：
 #  1) issue 同时具备 `accepted` 标签 + 含 `[数据中台需求]` 的评论时 → 在 issue 下贴一条「可用命令菜单」
 #     （说明 [小数需求分析] / [小数需求实现] / [小数需求上线] 各干什么）。
 #  2) issue 评论命中触发词时 → 通过 repository_dispatch 把事件转发到 om-datacenter 的对应 workflow：
-#       [小数需求分析]/[数据中台需求分析]            → backlog_analyze   （issue-1：写需求分析说明书 PR 到本仓）
+#       [小数需求分析]/[数据中台需求分析]            → backlog_analyze   （issue-1：写需求分析说明书 PR 到 backlog 仓）
 #       [小数需求实现]/[数据中台需求实现]            → backlog_implement （issue-2：多 agent 对抗开发 + 预览）
 #       [小数需求上线]/[小数合入上线]/[数据中台合入上线] → backlog_merge     （issue-3：白名单门禁 → 合入 + 上线 beta）
 #
@@ -57,7 +58,7 @@ jobs:
               echo ''
               echo '| 评论 | 干什么 |'
               echo '|------|--------|'
-              echo '| `[小数需求分析]` | AI 按 backlog 规范写一份「需求分析说明书」，提 PR 到本仓（`opensourceways/<repo>/issue_docs/<本 issue 号>/Requirement Analysis/`，分支 `issue-<N>-design-docs`），**等人评审合入**。想重写就再评 `[小数需求分析] 你的补充意见`。 |'
+              echo '| `[小数需求分析]` | AI 按 backlog 规范写一份「需求分析说明书」，提 PR 到 backlog 仓（`opensourceways/<本仓短名>/issue_docs/<本 issue 号>/Requirement Analysis/`，分支 `issue-<N>-design-docs`），**等人评审合入**。想重写就再评 `[小数需求分析] 你的补充意见`。 |'
               echo '| `[小数需求实现]` | 需求分析说明书 PR 合入后再评这个。AI 多 agent 对抗开发（design → dev → 起预览 → review → tester），改对应仓、开 PR、回评预览地址。对预览不满意 → 再评 `[小数需求实现]`，换行写「要做的改动」，二轮在原分支上接着改。 |'
               echo '| `[小数需求上线]` | 看预览满意后评这个（**仅白名单 maintainer 能真合入**；先评 `[小数需求上线] [DRY_RUN]` 只跑门禁不合入）。合入相关 PR + 上线 beta + 清理预览资源。 |'
               echo ''
@@ -113,7 +114,7 @@ jobs:
           EOF
           gh api -X POST /repos/opensourceways/om-datacenter/dispatches --input /tmp/dispatch.json
 
-      - name: Comment back on backlog issue
+      - name: Comment back on issue
         if: env.EVENT_TYPE != ''
         env:
           GH_TOKEN: ${{ github.token }}
