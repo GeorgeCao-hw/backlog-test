@@ -14,7 +14,7 @@
 
 **场景说明:**
 
-当前热点问题数据库已接入论坛类渠道（覆盖 openubmc、cann、mindspore、openeuler、mindcluster、mindie、mindstudio、mindseriessdk 共 8 个社区），但社区现有数据缺少浏览量和回复量指标。用户在查看论坛热点问题时，无法了解帖子的受关注程度（浏览数）和社区参与度（回复数），影响问题优先级判断和热度评估。本次需求对论坛渠道的数据结构进行补充，新增浏览量（browse_num）和回复量（reply_num）两个字段，贯穿数据采集→清洗→聚类→展示全链路。
+当前热点问题数据库已接入论坛类渠道（覆盖 openubmc、cann、mindspore、openeuler、mindcluster、mindie、mindstudio、mindseriessdk 共 8 个社区），但社区现有数据缺少浏览量和回复量指标。运营人员在查看论坛热点问题时，无法了解帖子的受关注程度（浏览数）和社区参与度（回复数），影响问题优先级判断和热度评估。本次需求对论坛渠道的 data-clean 数据采集链路进行补充，新增浏览量（browse_num）和回复量（reply_num）两个字段，数据入库后由运营直接查询数据库或通过 data-clean API 查看。
 
 ## 3. 需求验收标准
 
@@ -23,11 +23,11 @@
 **验收标准:**
 
 * [ ] 论坛渠道数据在 data-clean 采集阶段从 DataStat API 获取 `browse_num` 和 `reply_num` 字段
-* [ ] `Discussion` 表新增浏览量字段，已有 `comment_num` 字段接收回复量数据
-* [ ] 清洗层（FormattedRecord）和聚类层（DiscussData）正确传递浏览量和回复量
+* [ ] `Discussion` 表新增 `browse_num` 列，已有 `comment_num` 列接收回复量数据（reply_num → comment_num 映射）
+* [ ] 清洗层（FormattedRecord）正确传递浏览量和回复量
+* [ ] `build_upsert_statement()` 正确将 `browse_num` 和 `comment_num` 写入 PostgreSQL
 * [ ] data-clean API 分页查询返回的数据包含浏览量和回复量
-* [ ] mining 聚类服务输入/输出数据中携带浏览量和回复量
-* [ ] 后端 Go 服务 API 响应模型新增浏览量和回复量字段
+* [ ] SQLAlchemy 自动检测并添加 `browse_num` 缺失列
 * [ ] 8 个论坛社区（openubmc、cann/cannopen、mindspore、openeuler、mindcluster、mindie、mindstudio、mindseriessdk）均能正确采集
 
 ---
@@ -40,23 +40,21 @@
 
 **技术栈：**
 - 数据采集与清洗：`hotopic-data-clean`（Python/FastAPI + PostgreSQL + SQLAlchemy）
-- 聚类分析：`hotopic-mining`（Python）
-- 后端服务：`hot-topic-website-backend`（Go + MongoDB）
-- 部署管理：`helm-chart-value`
+- ~~聚类分析：`hotopic-mining`（Python）~~ — 不在本次范围
+- ~~后端服务：`hot-topic-website-backend`（Go + MongoDB）~~ — 不在本次范围
+- 部署管理：`helm-chart-value`（仅配置确认）
 
 **数据源：** DataStat API（`beta.datastat.osinfra.cn`），论坛主题表 `fact_{community}_forum_topic`
 
 **逻辑方案：**
 
-本次需求是在现有论坛数据采集链路上补充两个字段，不改变数据流向和架构。核心改动为：
+本次需求是在 data-clean 的论坛数据采集链路中补充两个字段，数据入库后运营人员直接查库或通过 API 查看，不涉及下游 mining 聚类和 backend 展示。核心改动为：
 
-1. **data-clean 采集层**：`ForumCollector._get_dim()` 新增 `browse_num` 和 `reply_num`，`collect()` 方法将这两个字段透传至返回数据
-2. **data-clean 数据库层**：`Discussion` 表新增 `browse_num` 列（`comment_num` 列已存在，直接接收 `reply_num` 的值）
-3. **data-clean 清洗层**：`FormattedRecord` 新增 `browse_num` 字段，`_build_record()` 从 raw_data 中提取并赋值
-4. **data-clean 存储层**：`build_upsert_statement()` 将 `browse_num` 和 `comment_num`（reply_num 映射到 comment_num）写入数据库
+1. **data-clean 采集层**：`ForumCollector._get_dim()` 新增 `browse_num` 和 `reply_num`，`collect()` 方法将 `reply_num` 映射至 `comment_num` 透传
+2. **data-clean 数据库层**：`Discussion` 表新增 `browse_num` 列（`comment_num` 列已存在，直接接收 `reply_num` 的值），SQLAlchemy `check_and_create_tables()` 自动检测并 ALTER TABLE
+3. **data-clean 清洗层**：`FormattedRecord` 新增 `browse_num` 字段（默认值 0），`_build_record()` 从 raw_data 中提取并赋值
+4. **data-clean 存储层**：`build_upsert_statement()` 将 `browse_num` 和 `comment_num` 写入数据库（INSERT 和 ON CONFLICT UPDATE 均包含）
 5. **data-clean API 层**：`DataManager` 分页查询 SELECT * 自动包含新字段
-6. **mining 聚类层**：`DiscussData` 新增 `browse_num`，`to_dict()` 序列化输出包含浏览量和回复量
-7. **后端 Go 服务**：`DiscussionSource` / `DiscussionSourceInfo` / `DiscussionSourceToReview` DTO 新增 `browse_num` 和 `comment_num` 字段
 
 ```mermaid
 %%{init: {
@@ -73,23 +71,13 @@ flowchart LR
     A["DataStat API\nfact_{community}_forum_topic\n字段: browse_num, reply_num"]
     end
 
-    subgraph data-clean
-    B["ForumCollector\n新增 dim: browse_num, reply_num"] --> C["BaseCleaner\nFormattedRecord 新增 browse_num"]
+    subgraph data-clean（本次范围）
+    B["ForumCollector\n新增 dim: browse_num, reply_num\ncollect将reply_num映射至comment_num"] --> C["BaseCleaner\nFormattedRecord 新增 browse_num"]
     C --> D["PostgreSQL Discussion表\n新增 browse_num 列\ncomment_num(已有)接收 reply_num"]
     D --> E["DataManager API\nSELECT * 自动返回新字段"]
     end
 
-    subgraph mining
-    E --> F["input_data.fetch_all_data\n拉取所有数据"]
-    F --> G["DiscussData\n新增 browse_num, to_dict 输出"]
-    G --> H["Cluster.run + Summary\n聚类生成热点"]
-    end
-
-    subgraph backend
-    H --> I["TopicReview API\n接收聚类结果"]
-    I --> J["MongoDB\n存储话题"]
-    J --> K["DTO 新增 browse_num, comment_num\n前端展示"]
-    end
+    E -.-> F["运营人员查库/API查看"]
 ```
 
 **字段映射关系：**
@@ -105,14 +93,11 @@ flowchart LR
 
 | 任务 ID | 任务描述 (Task Description) | 预期产出 (Deliverables) | 预期工作量（人天） |
 |---------|------------------------------|-------------------------|-----------------|
-| **task1** | `hotopic-data-clean` 采集层：`ForumCollector._get_dim()` 新增 `browse_num` 和 `reply_num`；`collect()` 透传字段 | collector.py 改动 | 0.5 |
+| **task1** | `hotopic-data-clean` 采集层：`ForumCollector._get_dim()` 新增 `browse_num` 和 `reply_num`；`collect()` 将 `reply_num` 映射至 `comment_num` | collector.py 改动 | 0.5 |
 | **task2** | `hotopic-data-clean` 清洗层：`FormattedRecord` 新增 `browse_num`；`_build_record()` 提取赋值；`build_upsert_statement()` 写入新字段 | clean.py + main.py 改动 | 0.5 |
 | **task3** | `hotopic-data-clean` 数据库层：`Discussion` 表新增 `browse_num` 列，SQLAlchemy 自动检测并添加缺失列 | base.py 改动 | 0.25 |
-| **task4** | `hotopic-mining` 聚类层：`DiscussData` 新增 `browse_num` 字段，`to_dict()` 输出包含 `browse_num` 和 `comment_num` | utils.py 改动 | 0.25 |
-| **task5** | `hot-topic-website-backend` Go 服务：`DiscussionSource` 等 DTO 新增 `BrowseNum` 和 `CommentNum` 字段 | Go DTO 改动 | 0.25 |
-| **task6** | 部署验证：各社区配置确认，端到端数据链路验证 | 验证报告 | 0.25 |
 
-**任务依赖说明**：task1 → task2 → task3 有顺序依赖（采集→清洗→存储）。task4 依赖 task3（mining 从 data-clean API 读取数据，新增字段需先入库）。task5 可与 task4 并行。task6 在所有 task 完成后执行。
+**任务依赖说明**：task1 → task2 → task3 有顺序依赖（采集→清洗→存储）。三个任务完成后，运营人员即可通过 data-clean API 或直接查库获取浏览量和回复量数据。
 
 ---
 
@@ -149,7 +134,7 @@ flowchart LR
 > *若涉及以下任一项，打标 `need_itest`标签，PR必须关联特性issue的测试策略和测试报告文档。 **如勾选需要给出原因**。
 
 * [x] **跨组件影响**：变更会触发下游服务或关联系统的连锁反应（级联效应）。
-  - 原因：数据库新增列影响 data-clean API 查询结果，进而影响 mining 聚类输入和 backend 展示输出，涉及 data-clean → mining → backend 三级链路。
+  - 原因：数据库新增列影响 data-clean API 查询结果（SELECT * 自动包含新字段），下游消费者需知晓字段变更。
 
 无其他勾选项
 
@@ -188,10 +173,10 @@ flowchart LR
 | **范围判定** | 该需求是否属于基础设施范围内？ | 是，属于热点问题数据库数据采集能力补充 |
 | **规划一致性** | 该需求是否在年度技术规划中？ | 是 |
 | **优先级** | 该需求优先级评估（高/中/低）？ | 中 |
-| **通用性** | 该需求是否解决 3 个以上业务方的共性痛点？ | 是，8 个论坛社区的运营和开发人员均可受益于浏览量和回复量数据 |
-| **必要性** | 现有组件通过配置变更是否无法实现目标或没有不用开发的替代方案？ | 是，需修改代码在数据采集链路中新增字段 |
-| **工作量** | 预计总工作量 2 人天？ | 2 人天 |
-| **价值评估** | 实现后能减少多少手动操作或提升多少系统稳定性？ | 实现后论坛热点问题可直接展示浏览量和回复量，为问题优先级判断和社区活跃度评估提供量化指标，无需人工查询原始论坛页面 |
+| **通用性** | 该需求是否解决 3 个以上业务方的共性痛点？ | 是，8 个论坛社区的运营人员均可受益于浏览量和回复量数据 |
+| **必要性** | 现有组件通过配置变更是否无法实现目标或没有不用开发的替代方案？ | 是，需修改代码在 data-clean 数据采集链路中新增字段 |
+| **工作量** | 预计总工作量 0.75 人天？ | 0.75 人天 |
+| **价值评估** | 实现后能减少多少手动操作或提升多少系统稳定性？ | 实现后运营人员可通过 data-clean API 或数据库直接查询论坛帖子的浏览量和回复量，为问题优先级判断和社区活跃度评估提供量化指标，无需人工查询原始论坛页面 |
 
 > **状态定义：** **Accept (准入)** | **Reject (驳回)** | **Pending (待议)**
 
@@ -222,13 +207,13 @@ flowchart LR
 
 | 仓库 | 分支 | 改动范围 |
 |------|------|---------|
-| `hotopic-data-clean` | hl_dev | collector.py / clean.py / base.py / main.py |
-| `hotopic-mining` | hl_dev | utils.py（DiscussData + to_dict） |
-| `hot-topic-website-backend` | hl_dev | Go DTO（DiscussionSource 等模型） |
+| `hotopic-data-clean` | hl_dev | collector.py / clean.py / base.py / main.py / test_clean.py |
 | `helm-chart-value` | hl_dev | 无代码改动（仅配置确认） |
 
 ### 7.3 不在本次需求范围内
 
 - Issue 渠道和 Mail 渠道：这两个渠道已有各自的数据指标体系，不在本次改动范围
 - 论坛帖子详情页数据采集：浏览量/回复量在 topic 表已有汇总值，无需从 post 表聚合
-- 前端 UI 展示：由后端 DTO 透出后，前端按需消费
+- **hotopic-mining 聚类层**：DiscussData 新增字段 → 不在本次范围，运营直接通过 data-clean API 或数据库查看
+- **hot-topic-website-backend Go 服务**：DTO 新增字段 → 不在本次范围，运营直接通过 data-clean API 或数据库查看
+- **前端 UI 展示**：不在本次范围
