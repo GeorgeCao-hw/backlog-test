@@ -50,7 +50,7 @@ jobs:
       github.event.issue.state == 'open' &&
       startsWith(github.event.comment.body, '[') &&
       contains(github.event.comment.body, '需求分析]')
-    runs-on: [self-hosted, ai-dev-runner]
+    runs-on: [self-hosted, ai-design-runner]   # 分析专用 runner（独立 PVC / 独立 pod），与 om-datacenter 的 ai-dev-runner 物理隔离，避免高峰排队
     timeout-minutes: 20
     env:
       HOME: /home/runner
