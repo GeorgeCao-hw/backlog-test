@@ -1,2 +1,7 @@
 .claude/skills/ai-doc-review-subagents
 .claude/skills/test-case-review
+
+# Python bytecode (from .github/scripts/*.py local testing)
+__pycache__/
+*.pyc
+.coverage

@@ -1,0 +1,62 @@
+# 跑 tests/ 下面的 pytest（目前只覆盖 .github/scripts/services.py）。
+# 触发：
+#   - PR 改了 .github/scripts/、tests/、.github/services/ 中任一处
+#   - push 到 main 时也跑一遍兜底
+#
+# 失败硬门禁：覆盖率 < 80% 直接挂掉，防止后续改动悄悄把覆盖打下去。
+
+name: tests (python)
+
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/**"
+      - ".github/services/**"
+      - "tests/**"
+      - ".github/workflows/test-python.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/**"
+      - ".github/services/**"
+      - "tests/**"
+      - ".github/workflows/test-python.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # 不开 pip cache：仓里没有 requirements.txt / pyproject.toml，actions/setup-python 需要它算 cache key；
+          # 而且依赖只有 3 个小包，cache 收益微乎其微。
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest pytest-cov
+
+      - name: Run tests with coverage gate ≥ 80%
+        # tests/conftest.py 把 .github/scripts/ 加进 sys.path，所以 `--cov=services` 能用模块名定位
+        run: |
+          pytest tests/ -v \
+            --cov=services \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=80
+
+      - name: Upload coverage XML (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore

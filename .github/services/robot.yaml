@@ -1,0 +1,40 @@
+# 服务注册：机器人
+#
+# 当前阶段：仅「需求分析」激活；「实现 / 上线」标 disabled，菜单里只显示占位说明。
+# 后续接通时把 disabled 拿掉，加 handler + triggers 即可，两个 workflow 文件不动。
+service:
+  id: robot
+  name: 机器人
+  pipeline_repo: opensourceways/backlog    # 当前阶段所有阶段都在 backlog 本仓跑
+
+menu:
+  trigger: "[机器人需求]"
+  required_label: accepted
+  header: "🤖 机器人需求 — 可用命令"
+  intro: |-
+    这个需求已 `accepted`，可由「机器人 AI 流水线」按下面流程推进。**直接在本 issue 评论触发词**即可（触发词放评论第一行；后面可换行写补充说明）：
+  footer: |-
+    > 当前阶段「机器人」流水线只接入了「需求分析」，「实现 / 上线」会在后续上线后开放。
+
+commands:
+  - id: analyze
+    triggers:
+      - "[机器人需求分析]"
+    handler: in-repo
+    title: "`[机器人需求分析]`"
+    description: |-
+      AI 把需求理清楚。**标题含 `[需求]`**：按 backlog 规范写「需求分析说明书」、提 PR 到 backlog 仓（`opensourceways/<本仓短名>/issue_docs/<本 issue 号>/Requirement Analysis/`，分支 `issue-<N>-design-docs`），**等人评审合入**。**标题含 `[任务]`/`[缺陷]`，或不含上述任何关键字**：只在本 issue 回一段「用户视角需求描述」、不写 backlog 文档。想重写：再评 `[机器人需求分析] 你的补充意见`。
+
+  - id: implement
+    handler: disabled
+    triggers: []                            # disabled 不需要触发词；菜单只贴个占位
+    title: "`[机器人需求实现]`"
+    description: |-
+      （暂未接入；机器人服务的「实现」阶段流水线还在搭建，上线后再开放。当前请先用 `[机器人需求分析]` 把需求理清楚。）
+
+  - id: release
+    handler: disabled
+    triggers: []
+    title: "`[机器人需求上线]`"
+    description: |-
+      （暂未接入；上线后再开放。）
