@@ -1,0 +1,90 @@
+name: 'Fetch Issue Content'
+description: 'Fetch issue data including design documents from comments'
+inputs:
+  issue-number:
+    description: 'Issue number to fetch'
+    required: true
+  github-token:
+    description: 'GitHub token for API access (use PAT with repo scope when source-repo is cross-repo)'
+    required: true
+  source-repo:
+    description: 'Source repo (owner/name). Default: current repo. Set to e.g. opensourceways/backlog for cross-repo dispatches.'
+    required: false
+    default: ''
+outputs:
+  title:
+    description: 'Issue title'
+    value: ${{ steps.fetch.outputs.title }}
+  body:
+    description: 'Issue body'
+    value: ${{ steps.fetch.outputs.body }}
+  has-docs:
+    description: 'Whether design documents were found'
+    value: ${{ steps.fetch.outputs.has_docs }}
+  dev-type:
+    description: 'Development type from labels'
+    value: ${{ steps.fetch.outputs.dev_type }}
+runs:
+  using: composite
+  steps:
+    - name: Fetch issue data
+      id: fetch
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SOURCE_REPO: ${{ inputs.source-repo }}
+      shell: bash
+      run: |
+        mkdir -p /tmp/opencode
+
+        # Cross-repo support: pass --repo only when source-repo input is non-empty
+        REPO_FLAG=""
+        if [ -n "$SOURCE_REPO" ]; then
+          REPO_FLAG="--repo $SOURCE_REPO"
+        fi
+
+        gh issue view ${{ inputs.issue-number }} $REPO_FLAG --json title,body,comments,labels > /tmp/opencode/issue_data.json
+        
+        TITLE=$(jq -r '.title // ""' /tmp/opencode/issue_data.json)
+        BODY=$(jq -r '.body // ""' /tmp/opencode/issue_data.json)
+        
+        REQ_DOC=$(jq -r '.comments[] | select(.body | startswith("<!-- REQUIREMENTS_DOC -->")) | .body' /tmp/opencode/issue_data.json 2>/dev/null | tail -1 | sed '1s/^<!-- REQUIREMENTS_DOC -->\n//')
+        DESIGN_DOC=$(jq -r '.comments[] | select(.body | startswith("<!-- DESIGN_DOC -->")) | .body' /tmp/opencode/issue_data.json 2>/dev/null | tail -1 | sed '1s/^<!-- DESIGN_DOC -->\n//')
+        
+        echo "$REQ_DOC" > /tmp/opencode/requirements.md
+        echo "$DESIGN_DOC" > /tmp/opencode/design.md
+        echo "$TITLE" > /tmp/opencode/title.txt
+        echo "$BODY" > /tmp/opencode/body.txt
+        
+        {
+          echo "Issue #${{ inputs.issue-number }}: $TITLE"
+          echo ""
+          echo "$BODY"
+          COMMENTS=$(jq -r '.comments[]?.body' /tmp/opencode/issue_data.json 2>/dev/null)
+          if [ -n "$COMMENTS" ]; then
+            echo ""
+            echo "--- 用户评论 ---"
+            echo "$COMMENTS"
+          fi
+        } > /tmp/opencode/issue.txt
+        
+        DEV_TYPE="both"
+        if jq -e '.labels[].name | select(. == "api-only")' /tmp/opencode/issue_data.json > /dev/null 2>&1; then
+          DEV_TYPE="api-only"
+        elif jq -e '.labels[].name | select(. == "frontend-only")' /tmp/opencode/issue_data.json > /dev/null 2>&1; then
+          DEV_TYPE="frontend-only"
+        fi
+        echo "$DEV_TYPE" > /tmp/opencode/dev_type.txt
+        
+        HAS_DOCS="false"
+        [ -n "$REQ_DOC" ] && [ -n "$DESIGN_DOC" ] && HAS_DOCS="true"
+        
+        {
+          echo "title<<EOF"
+          echo "$TITLE"
+          echo "EOF"
+          echo "body<<EOF"
+          echo "$BODY"
+          echo "EOF"
+          echo "has_docs=$HAS_DOCS"
+          echo "dev_type=$DEV_TYPE"
+        } >> $GITHUB_OUTPUT
