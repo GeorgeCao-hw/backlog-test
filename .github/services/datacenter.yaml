@@ -1,0 +1,57 @@
+# 服务注册：数据中台
+#
+# 由 .github/workflows/services-menu.yml（菜单 + 转发）和
+#    .github/workflows/analyze-requirement.yml（需求分析）共同消费。
+#
+# 加新服务 = 新增 .github/services/<id>.yaml；两个 workflow 不用改。
+service:
+  id: datacenter                           # 仅 [a-z0-9_]；用于评论锚点 <!-- SERVICE_DATACENTER_MENU -->
+  name: 数据中台                            # 中文显示名（菜单标题用）
+  pipeline_repo: opensourceways/om-datacenter    # 仅展示用；标明流水线最终在哪个仓跑
+
+# 贴菜单的入口：accepted 标签 + 这个关键词的评论
+menu:
+  trigger: "[数据中台需求]"
+  required_label: accepted
+  header: "🤖 数据中台需求 — 可用命令"
+  intro: |-
+    这个需求已 `accepted`，可由「数据中台 AI 流水线」按下面三步推进。**直接在本 issue 评论触发词**即可（触发词放评论第一行；后面可换行写补充说明）：
+  footer: |-
+    > 这套流水线的「分析」阶段跑在本仓（`opensourceways/backlog`），「实现 / 上线」阶段跑在 `opensourceways/om-datacenter`，所有进展都会回评在本 issue。
+
+# 3 段式命令
+commands:
+  - id: analyze
+    triggers:
+      - "[数据中台需求分析]"
+      - "[小数需求分析]"
+    handler: in-repo                       # 本仓 self-handle，由 analyze-requirement.yml 消费
+    title: "`[小数需求分析]`"
+    description: |-
+      AI 把需求理清楚。**标题含 `[需求]`**：按 backlog 规范写「需求分析说明书」、提 PR 到 backlog 仓（`opensourceways/<本仓短名>/issue_docs/<本 issue 号>/Requirement Analysis/`，分支 `issue-<N>-design-docs`），**等人评审合入**再评 `[小数需求实现]`。**标题含 `[任务]`/`[缺陷]`，或不含上述任何关键字**：只在本 issue 回一段「用户视角需求描述」、不写 backlog 文档，可直接评 `[小数需求实现]`。想重写都可再评 `[小数需求分析] 你的补充意见`。
+
+  - id: implement
+    triggers:
+      - "[数据中台需求实现]"
+      - "[小数需求实现]"
+    handler: forward                       # 仍走 repository_dispatch 转发到 om-datacenter
+    forward:
+      repo: opensourceways/om-datacenter
+      event_type: backlog_implement
+    title: "`[小数需求实现]`"
+    description: |-
+      需求分析说明书 PR 合入后再评这个。AI 多 agent 对抗开发（design → dev → 起预览 → review → tester），改对应仓、开 PR、回评预览地址。对预览不满意 → 再评 `[小数需求实现]`，换行写「要做的改动」，二轮在原分支上接着改。
+
+  - id: release
+    triggers:
+      - "[数据中台需求上线]"
+      - "[小数需求上线]"
+      - "[小数合入上线]"
+      - "[数据中台合入上线]"
+    handler: forward
+    forward:
+      repo: opensourceways/om-datacenter
+      event_type: backlog_merge
+    title: "`[小数需求上线]`"
+    description: |-
+      看预览满意后评这个（**仅白名单 maintainer 能真合入**；先评 `[小数需求上线] [DRY_RUN]` 只跑门禁不合入）。合入相关 PR + 上线 beta + 清理预览资源。

@@ -1,0 +1,263 @@
+# 通用「需求分析」workflow（多服务复用）
+#
+# 触发：本仓 issue 评论以任一服务 `analyze.triggers` 为开头（且对应服务 `handler: in-repo`）。
+# 当前生效的触发词集合：
+#   - 数据中台 ([数据中台需求分析] / [小数需求分析])
+#   - 机器人   ([机器人需求分析])
+# 后续加服务只要往 .github/services/<id>.yaml 加 commands.analyze.triggers，本文件无需改动。
+#
+# 按 issue **标题**分两种处理（沿用 om-datacenter Workflow A 的逻辑）：
+#   A) 标题含 `[需求]` → "ra-doc" 模式：按 backlog 仓规范
+#      (templates/Requirement Analysis/#1...md + AGENTS.md + .github/agents/requirements-doc.md)
+#      写一份《需求分析说明书》→ 提 PR 到 backlog 本仓
+#      (分支 issue-<N>-design-docs，base main，路径 opensourceways/<repo>/issue_docs/<N>/Requirement Analysis/)
+#      → 回评 issue 贴 PR 链接，**等人评审合入**。
+#   B) 标题含 `[任务]` / `[缺陷]`，或不含上述任何关键字 → "user-view" 模式：不写 backlog 文档，
+#      只在 issue 里回一段「用户视角需求描述」（带 <!-- USER_VIEW_DOC --> 锚点，供后续 Workflow B 用）。
+#
+# **不自动级联**触发实现 —— 用户后续手动评论 `[小数需求实现]` / `[机器人需求实现]` 等再进 Workflow B。
+#
+# 与 om-datacenter 的 issue-1-analyze-requirement.yml 的区别：
+#   1) 不监听 repository_dispatch（backlog 本仓评论直接触发；其他源仓如 om-dataarts-deployment 仍走老链路）
+#   2) source_repo / docs_repo 都是本仓 (backlog)，所以 PR 推到本仓自己
+#   3) 服务标识写进环境变量（SERVICE_ID / SERVICE_NAME）供日志与回评消息使用
+#
+# 前置 Secrets（本仓 Settings → Secrets and variables → Actions）：
+#   - OPENCODE_API_KEY     必填（opencode 调 LLM 用）
+#   - CROSS_REPO_TOKEN     必填（gh CLI 跨仓 / 写本仓 PR 用；fine-grained 至少 contents: write + pull-requests: write + issues: write）
+#   - BACKLOG_REPO_TOKEN   可选（如果想跟 om-datacenter 一致，单独区分；不填则 fallback 用 CROSS_REPO_TOKEN）
+
+name: 1️⃣ 需求分析（多服务 / [需求]→Backlog PR / [任务][缺陷]→用户视角评论）
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: analyze-${{ github.repository }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  analyze:
+    # 粗筛：评论以 [ 开头且含 "需求分析]" —— 真正的服务匹配在内部 Python 脚本里精筛
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.state == 'open' &&
+      startsWith(github.event.comment.body, '[') &&
+      contains(github.event.comment.body, '需求分析]')
+    runs-on: [self-hosted, ai-dev-runner]
+    timeout-minutes: 20
+    env:
+      HOME: /home/runner
+      SOURCE_REPO: ${{ github.repository }}            # backlog 本仓
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      DOCS_REPO: ${{ github.repository }}              # docs 也提到本仓
+      OPENCODE_MODEL: alibaba-cn/glm-5
+
+    steps:
+      - name: Checkout backlog (templates / AGENTS.md / context / scripts / agent role 都在这里)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          token: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+          fetch-depth: 0      # 后续要新建/切换 issue-<N>-design-docs 分支，需要完整历史
+
+      - name: Install PyYAML
+        shell: bash
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Match service from comment (.github/services/*.yaml) — 精筛
+        id: match
+        shell: bash
+        run: |
+          # 让 Python 决定本评论命中哪个 in-repo analyze 命令；命中则把 SERVICE_ID / SERVICE_NAME 写进 GITHUB_OUTPUT
+          python3 - <<'PY'
+          import os, sys, pathlib, yaml
+          body = os.environ.get('COMMENT_BODY', '') or ''
+          for p in sorted(pathlib.Path('.github/services').glob('*.yaml')):
+              data = yaml.safe_load(open(p, encoding='utf-8')) or {}
+              for cmd in data.get('commands', []) or []:
+                  if cmd.get('id') != 'analyze' or cmd.get('handler') != 'in-repo':
+                      continue
+                  for trig in cmd.get('triggers') or []:
+                      if body.startswith(trig):
+                          out = os.environ['GITHUB_OUTPUT']
+                          with open(out, 'a', encoding='utf-8') as f:
+                              f.write(f"matched=true\n")
+                              f.write(f"service_id={data['service']['id']}\n")
+                              f.write(f"service_name={data['service']['name']}\n")
+                              f.write(f"trigger={trig}\n")
+                          print(f"::notice::matched service={data['service']['id']} trigger={trig}")
+                          sys.exit(0)
+          # No match
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write("matched=false\n")
+          print("::notice::comment did not match any in-repo analyze trigger; skipping")
+          PY
+
+      - name: Decide A_MODE (by issue title) + compute names
+        if: steps.match.outputs.matched == 'true'
+        shell: bash
+        run: |
+          # 标题含 [需求] → ra-doc；其他 → user-view
+          case "$ISSUE_TITLE" in
+            *"[需求]"*) A_MODE=ra-doc ;;
+            *)          A_MODE=user-view ;;
+          esac
+          echo "A_MODE=$A_MODE"                                          >> "$GITHUB_ENV"
+          SHORT="${SOURCE_REPO##*/}"
+          echo "SOURCE_REPO_SHORT=$SHORT"                                >> "$GITHUB_ENV"
+          echo "DOCS_BRANCH=issue-${ISSUE_NUMBER}-design-docs"           >> "$GITHUB_ENV"
+          echo "DOCS_DIR=opensourceways/${SHORT}/issue_docs/${ISSUE_NUMBER}" >> "$GITHUB_ENV"
+          echo "SERVICE_ID=${{ steps.match.outputs.service_id }}"        >> "$GITHUB_ENV"
+          echo "SERVICE_NAME=${{ steps.match.outputs.service_name }}"    >> "$GITHUB_ENV"
+          echo "  ISSUE_TITLE=[$ISSUE_TITLE]  -> A_MODE=$A_MODE  (service=${{ steps.match.outputs.service_id }})"
+
+      - name: Setup opencode env
+        if: steps.match.outputs.matched == 'true'
+        uses: ./.github/actions/setup
+        with:
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
+
+      - name: Fetch issue + comments (→ /tmp/opencode/issue.txt)
+        if: steps.match.outputs.matched == 'true'
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          source-repo: ${{ env.SOURCE_REPO }}
+          github-token: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+
+      # ─────────────────── ra-doc 模式 ───────────────────
+      - name: Prepare docs branch (ra-doc)
+        if: steps.match.outputs.matched == 'true' && env.A_MODE == 'ra-doc'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          # backlog 本仓就是 docs 仓，直接在 checkout 工作树切分支即可
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git fetch origin "${DOCS_BRANCH}" 2>/dev/null; then
+            git checkout -B "${DOCS_BRANCH}" FETCH_HEAD
+          else
+            # base on main 起新分支
+            git fetch origin main
+            git checkout -B "${DOCS_BRANCH}" origin/main
+          fi
+
+      - name: 写 Backlog 需求分析说明书 (opencode + .github/agents/requirements-doc.md)
+        if: steps.match.outputs.matched == 'true' && env.A_MODE == 'ra-doc'
+        shell: bash
+        run: |
+          ROLE="$(cat .github/agents/requirements-doc.md)"
+          ISSUE_CONTENT="$(cat /tmp/opencode/issue.txt 2>/dev/null || echo '')"
+          PROMPT="${ROLE}
+
+          ================ 本次任务 ================
+          SOURCE_REPO=${SOURCE_REPO}  ISSUE_NUMBER=${ISSUE_NUMBER}  SERVICE=${SERVICE_NAME} (${SERVICE_ID})
+          目标文件：${DOCS_DIR}/Requirement Analysis/#${ISSUE_NUMBER} Requirement Analysis Specification.md
+          （同时建空目录 ${DOCS_DIR}/Docs/ 并放一个 .gitkeep）
+          当前工作目录就是 backlog 仓的 checkout —— templates/、AGENTS.md、README.md、context/ 都在这里，先读它们再动手。
+
+          issue 内容（标题 + 正文 + 全部评论，含触发评论里用户写的补充意见）：
+          ${ISSUE_CONTENT}
+          "
+          opencode run "$PROMPT" --model "$OPENCODE_MODEL" --agent build --dangerously-skip-permissions --thinking=false || true
+
+      - name: Commit + push docs branch + open PR (ra-doc)
+        if: steps.match.outputs.matched == 'true' && env.A_MODE == 'ra-doc'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          # 只收 DOCS_DIR 范围内的改动；agent 误改 templates/ context/ 等不进 commit
+          git add -- "${DOCS_DIR}" 2>/dev/null || true
+          git commit -m "需求分析: ${SOURCE_REPO}#${ISSUE_NUMBER} 需求分析说明书 (${SERVICE_NAME})" \
+            || echo "::notice::无新改动可提交（重跑产出相同？），继续"
+          if ! git ls-tree -r --name-only HEAD -- "${DOCS_DIR}/Requirement Analysis" | grep -q .; then
+            echo "::error::需求分析说明书未生成（${DOCS_DIR}/Requirement Analysis/ 下没文件），opencode 输出可能为空"
+            exit 1
+          fi
+          git push -u origin "${DOCS_BRANCH}" --force-with-lease   # 重跑覆盖
+          PR_URL="$(gh pr list --repo "$DOCS_REPO" --head "$DOCS_BRANCH" --state open --json url -q '.[0].url' 2>/dev/null || true)"
+          if [ -z "$PR_URL" ] || [ "$PR_URL" = "null" ]; then
+            PR_BODY="$(printf '自动生成的需求分析说明书（%s 服务）。\n\n来源 issue: %s#%s — https://github.com/%s/issues/%s\n路径: `%s/Requirement Analysis/`\n\n评审 / 补充后**合入本 PR**；合入后在该 issue 评论 `[%s需求实现]` 进入多 agent 对抗开发。' "$SERVICE_NAME" "$SOURCE_REPO" "$ISSUE_NUMBER" "$SOURCE_REPO" "$ISSUE_NUMBER" "$DOCS_DIR" "$SERVICE_NAME")"
+            PR_URL="$(gh pr create --repo "$DOCS_REPO" --base main --head "$DOCS_BRANCH" \
+              --title "需求分析: ${SOURCE_REPO}#${ISSUE_NUMBER} (${SERVICE_NAME})" --body "$PR_BODY")"
+          fi
+          echo "PR_URL=$PR_URL" >> "$GITHUB_ENV"
+          echo "  PR_URL=$PR_URL"
+
+      - name: 回评 issue (ra-doc：PR 链接 + 下一步)
+        if: steps.match.outputs.matched == 'true' && env.A_MODE == 'ra-doc'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          {
+            echo '<!-- USER_VIEW_DOC -->'
+            echo "## 📋 需求分析说明书已生成 (Workflow A — ${SERVICE_NAME})"
+            echo ''
+            echo "- 文档 PR：${PR_URL}"
+            echo "- 在 \`${DOCS_REPO}\` 的 \`${DOCS_DIR}/Requirement Analysis/#${ISSUE_NUMBER} Requirement Analysis Specification.md\`"
+            echo "- 请评审 / 补充后**合入该 PR**。合入后在本 issue 评论 \`[${SERVICE_NAME}需求实现]\` 进入多 agent 对抗开发（design → dev → 预览 → review → tester）。"
+            echo "- 想让 AI 重写：评论 \`[${SERVICE_NAME}需求分析] 你的补充意见\`（会覆盖刷新该分支上的文档）。"
+          } > /tmp/body.txt
+          gh issue comment "$ISSUE_NUMBER" --repo "$SOURCE_REPO" --body-file /tmp/body.txt
+
+      # ─────────────────── user-view 模式 ([任务]/[缺陷] 或无关键字) ───────────────────
+      - name: 写极简用户视角描述 (opencode)
+        if: steps.match.outputs.matched == 'true' && env.A_MODE == 'user-view'
+        shell: bash
+        run: |
+          ISSUE_CONTENT="$(cat /tmp/opencode/issue.txt 2>/dev/null || echo '')"
+          PROMPT="你是产品经理。基于下面这个 issue（[任务]/[缺陷] 类，或标题不带关键字），写一段**极简**的用户视角描述，让用户能直接进入实现阶段。
+
+          要求（务必遵守，否则会被判失败）：
+          1. **只写一段，3-8 行**，不要长篇大论，不写设计方案、不写代码、不提技术栈
+          2. 内容只包含：改动位置（1 句话：页面/模块/元素）、改动前后（用 \`A → B\` 对比格式）、影响范围（1 句话：哪些社区/用户）
+          3. 缺陷类要写清「现象 → 期望」；任务/其它类写清「要做的事 + 完成标志」
+          4. **不要问鸡毛蒜皮的确认项**（全/半角括号、大小写、间距等）；issue 已写明的按字面执行
+          5. 写到 /tmp/opencode/user_view.md（不要重复标题）
+
+          issue 内容（标题 + 正文 + 全部评论，含触发评论里用户写的补充意见）：
+          ${ISSUE_CONTENT}
+          "
+          opencode run "$PROMPT" --model "$OPENCODE_MODEL" --agent build --dangerously-skip-permissions --thinking=false || true
+
+      - name: 回评 issue (user-view：用户视角描述 + 下一步)
+        if: steps.match.outputs.matched == 'true' && env.A_MODE == 'user-view'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          if [ -s /tmp/opencode/user_view.md ]; then
+            {
+              echo '<!-- USER_VIEW_DOC -->'
+              echo "## 📋 需求分析 (Workflow A — ${SERVICE_NAME} —— [任务]/[缺陷] 或无关键字，只回用户视角描述，不写 backlog 需求文档)"
+              echo ''
+              cat /tmp/opencode/user_view.md
+              echo ''
+              echo '---'
+              echo "下一步：评论 \`[${SERVICE_NAME}需求实现]\` 进入多 agent 对抗开发（无需评审合入文档 PR——非 [需求] 类不写需求分析说明书；要走 backlog 需求文档评审流程，请在标题加 \`[需求]\` 后重评 \`[${SERVICE_NAME}需求分析]\`）。要调整上面的描述：评论 \`[${SERVICE_NAME}需求分析] 你的补充意见\` 重跑。"
+            } > /tmp/body.txt
+            gh issue comment "$ISSUE_NUMBER" --repo "$SOURCE_REPO" --body-file /tmp/body.txt
+          else
+            gh issue comment "$ISSUE_NUMBER" --repo "$SOURCE_REPO" --body "⚠️ Workflow A 未能生成用户视角描述（opencode 输出为空），请补充 issue 内容后再评论触发词重试。"
+          fi
+
+      - name: 兜底回评（脚本异常时也给用户一个信号）
+        if: steps.match.outputs.matched == 'true' && failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.BACKLOG_REPO_TOKEN || secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$SOURCE_REPO" \
+            --body "❌ Workflow A（需求分析 / ${SERVICE_NAME:-未知服务}）执行异常，详见 [run logs](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})。补充 issue 内容后重新评论触发词重试。" || true
