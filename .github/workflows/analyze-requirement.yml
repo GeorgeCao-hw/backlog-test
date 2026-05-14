@@ -50,7 +50,7 @@ jobs:
       github.event.issue.state == 'open' &&
       startsWith(github.event.comment.body, '[') &&
       contains(github.event.comment.body, '需求分析]')
-    runs-on: [self-hosted, ai-dev-runner]   # 回退：ai-design-runner 实际未部署（commit 7bd7d75/829f723 描述的 deploy/runners/ai-design-runner.yaml 没入仓，job 一直找不到 runner 排队失败）；先复用 ai-dev-runner 让 workflow 可用
+    runs-on: [self-hosted, ai-design-runner]   # backlog 仓自己的 self-hosted runner（pod ai-design-runner-k8s 已注册到本仓 Settings → Actions → Runners，online）。参考 om-datacenter/deploy/runners/ai-dev-runner.yaml 同形部署，区别只是 runner-secrets 里 GITHUB_URL=backlog
     timeout-minutes: 20
     env:
       HOME: /home/runner
