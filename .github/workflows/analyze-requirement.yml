@@ -50,7 +50,7 @@ jobs:
       github.event.issue.state == 'open' &&
       startsWith(github.event.comment.body, '[') &&
       contains(github.event.comment.body, '需求分析]')
-    runs-on: [self-hosted, ai-design-runner]   # 分析专用 runner（独立 PVC / 独立 pod），与 om-datacenter 的 ai-dev-runner 物理隔离，避免高峰排队
+    runs-on: [self-hosted, ai-dev-runner]   # 回退：ai-design-runner 实际未部署（commit 7bd7d75/829f723 描述的 deploy/runners/ai-design-runner.yaml 没入仓，job 一直找不到 runner 排队失败）；先复用 ai-dev-runner 让 workflow 可用
     timeout-minutes: 20
     env:
       HOME: /home/runner
