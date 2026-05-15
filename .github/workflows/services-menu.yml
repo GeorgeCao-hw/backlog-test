@@ -39,7 +39,7 @@ jobs:
     if: |
       (github.event_name == 'issue_comment' && github.event.issue.state == 'open') ||
       (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.issue.state == 'open')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ai-design-runner]   # 2026-05-15 改 self-hosted 绕开 GitHub Actions ubuntu-latest 配额耗尽问题；任务极轻（<30s），跟 analyze 共享一台 runner 不冲突
     timeout-minutes: 3
     env:
       GH_TOKEN: ${{ github.token }}
@@ -62,7 +62,7 @@ jobs:
   # ───────────────────────── 2) 把 forward 命令转发到目标仓 ─────────────────────────
   forward:
     if: github.event_name == 'issue_comment' && github.event.issue.state == 'open'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ai-design-runner]   # 2026-05-15 改 self-hosted 绕开 GitHub Actions ubuntu-latest 配额耗尽问题；任务极轻（<30s），跟 analyze 共享一台 runner 不冲突
     timeout-minutes: 3
     env:
       GH_TOKEN: ${{ github.token }}                  # 回评 issue 用本仓 token

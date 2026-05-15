@@ -27,27 +27,25 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ai-design-runner]   # 2026-05-15 改 self-hosted 绕开 GitHub Actions ubuntu-latest 配额耗尽问题；跑 pytest 几秒，跟 analyze 共享一台 runner 不冲突
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          # 不开 pip cache：仓里没有 requirements.txt / pyproject.toml，actions/setup-python 需要它算 cache key；
-          # 而且依赖只有 3 个小包，cache 收益微乎其微。
-
+      # 不用 actions/setup-python@v5：self-hosted runner pod 没 root、装不进 /opt/hostedtoolcache。
+      # 镜像 ghcr.io/opensourceways-test/om-datacenter:latest 自带 python3 + pip3，--user 安装就行。
       - name: Install deps
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest pytest-cov
+          python3 --version
+          python3 -m pip install --user --quiet --upgrade pip
+          python3 -m pip install --user --quiet pyyaml pytest pytest-cov
 
       - name: Run tests with coverage gate ≥ 80%
         # tests/conftest.py 把 .github/scripts/ 加进 sys.path，所以 `--cov=services` 能用模块名定位
+        shell: bash
         run: |
-          pytest tests/ -v \
+          python3 -m pytest tests/ -v \
             --cov=services \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
