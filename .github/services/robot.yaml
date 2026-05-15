@@ -30,7 +30,9 @@ commands:
     triggers: []                            # disabled 不需要触发词；菜单只贴个占位
     title: "`[机器人需求实现]`"
     description: |-
-      （暂未接入；机器人服务的「实现」阶段流水线还在搭建，上线后再开放。当前请先用 `[机器人需求分析]` 把需求理清楚。）
+      （暂未接入；机器人服务的「实现」阶段还没建 tools_repo（装 orchestrate.sh + agents + deployer 的工具仓）。
+      建好后改 handler=in-repo + 配 triggers + 在本文件加一段 implement:（tools_repo / workspace_root / ...），
+      backlog 的 .github/workflows/implement.yml 会自动接管。当前请先用 `[机器人需求分析]` 把需求理清楚。）
 
   - id: release
     handler: disabled
@@ -38,3 +40,13 @@ commands:
     title: "`[机器人需求上线]`"
     description: |-
       （暂未接入；上线后再开放。）
+
+# implement workflow 的配置 —— robot 服务 tools_repo 还没建，本段先留空（commands.implement.handler 也是 disabled）。
+# 等以后机器人服务的 orchestrate 工具仓就绪，把下面这段填上 + 把 commands.implement.handler 改成 in-repo 即可。
+# implement:
+#   tools_repo: opensourceways/<robot-tools-repo-tbd>
+#   tools_ref: main
+#   workspace_root: /workspaces/robot
+#   preview_namespace: ai-test
+#   orchestrate: bash src/orchestrate.sh
+#   max_fix_rounds: 3

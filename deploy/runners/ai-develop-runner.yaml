@@ -1,0 +1,84 @@
+# Runner D — 对抗实现 + 预览专用 runner（GitHub Actions label: ai-develop-runner）
+#
+# 注册到 opensourceways/backlog 仓，跑 .github/workflows/implement.yml（多服务通用 Workflow B）。
+# 跟 ai-design-runner / om-datacenter 的 ai-dev-runner 物理隔离，避免高峰期资源争用。
+#
+# 工作流程：
+#   1. backlog issue 评论 [<service>需求实现] 触发本 runner
+#   2. workflow 读 .github/services/<service>.yaml 决定 tools_repo（如 opensourceways/om-datacenter）
+#   3. clone tools_repo --recurse-submodules → 5 个 dev 子仓在 $GITHUB_WORKSPACE/tools/<repo>/
+#   4. bash "$TOOLS_DIR/src/orchestrate.sh" 跑对抗循环（dev → deploy → tester → gate）
+#
+# ServiceAccount + RoleBinding 见同目录 rbac.yaml。
+#
+# 前置 Secret（ai-test ns）：
+#   ai-develop-runner-secrets:
+#     GITHUB_URL    = https://github.com/opensourceways/backlog
+#     RUNNER_TOKEN  = 在本仓 GitHub Settings 拉的注册 token（~1h 过期）
+#
+# bootstrap.sh ConfigMap 复用 om-datacenter 仓 deploy/runners/runner-bootstrap.yaml 部署的 `runner-bootstrap`（同 ns）。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-develop-workspaces
+  namespace: ai-test
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: sfsturbo-subpath-sc
+  resources:
+    requests:
+      storage: 30Gi                          # 比 ai-design-runner 大一点：要装 tools_repo + 多个 dev 子仓 + per-issue 工作区
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-develop-runner
+  namespace: ai-test
+  labels: { app: ai-develop-runner, managed-by: ci }
+spec:
+  replicas: 1                                # 先 1 副本；并发实现需求多了再加（PVC RWX 可多 pod 共享）
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ai-develop-runner }
+  template:
+    metadata:
+      labels: { app: ai-develop-runner }
+    spec:
+      serviceAccountName: ai-develop-runner
+      imagePullSecrets:
+      - name: huawei-swr-image-pull-secret
+      containers:
+      - name: runner
+        image: ghcr.io/opensourceways-test/om-datacenter:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "/opt/bootstrap/bootstrap.sh"]
+        env:
+        - name: HOME
+          value: /home/runner
+        - name: RUNNER_NAME
+          value: ai-develop-runner-k8s
+        - name: RUNNER_LABELS
+          value: "self-hosted,ai-develop-runner"
+        - name: RUNNER_GROUP
+          value: "default"
+        - name: DOTNET_SYSTEM_GLOBALIZATION_INVARIANT
+          value: "1"
+        - name: GITHUB_URL
+          valueFrom: { secretKeyRef: { name: ai-develop-runner-secrets, key: GITHUB_URL } }
+        - name: ACCESS_TOKEN
+          valueFrom: { secretKeyRef: { name: ai-develop-runner-secrets, key: ACCESS_TOKEN, optional: true } }
+        - name: RUNNER_TOKEN
+          valueFrom: { secretKeyRef: { name: ai-develop-runner-secrets, key: RUNNER_TOKEN, optional: true } }
+        volumeMounts:
+        - name: bootstrap
+          mountPath: /opt/bootstrap
+        - name: workspaces
+          mountPath: /workspaces
+        resources:
+          requests: { cpu: "1",   memory: 2Gi }    # 实现工作比分析重（要跑 dev/tester/gate 多 agent）
+          limits:   { cpu: "6",   memory: 12Gi }
+      volumes:
+      - name: bootstrap
+        configMap: { name: runner-bootstrap, defaultMode: 0755 }
+      - name: workspaces
+        persistentVolumeClaim: { claimName: ai-develop-workspaces }

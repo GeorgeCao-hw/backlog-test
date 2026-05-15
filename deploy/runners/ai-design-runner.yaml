@@ -1,0 +1,81 @@
+# Runner C — 需求分析专用 runner（GitHub Actions label: ai-design-runner）
+#
+# 注册到 opensourceways/backlog 仓，跑 .github/workflows/analyze-requirement.yml。
+# 跟 ai-develop-runner / om-datacenter 的 ai-dev-runner 物理隔离（独立 PVC、独立 pod、独立 Deployment），
+# 避免高峰期 issue 并发时分析阶段被实现/上线阶段排队。
+#
+# ServiceAccount + RoleBinding 见同目录 rbac.yaml（与 ai-develop-runner 同住一个文件，便于权限审计）。
+#
+# 前置 Secret（ai-test ns）：
+#   backlog-runner-secrets:
+#     GITHUB_URL    = https://github.com/opensourceways/backlog
+#     RUNNER_TOKEN  = GitHub Settings→Actions→Runners→「Add new runner」给的那串（~1h 过期，注册一次后就不再用到）
+#
+# 引用的 ConfigMap `runner-bootstrap`（bootstrap.sh 内容）目前定义在
+# opensourceways/om-datacenter:deploy/runners/runner-bootstrap.yaml（ai-test ns 内同名 ConfigMap）。
+# 多 runner 共享同一个 bootstrap，将来要改 bootstrap 行为时改那一份即可。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-design-workspaces
+  namespace: ai-test
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: sfsturbo-subpath-sc
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-design-runner
+  namespace: ai-test
+  labels: { app: ai-design-runner, managed-by: ci }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ai-design-runner }
+  template:
+    metadata:
+      labels: { app: ai-design-runner }
+    spec:
+      serviceAccountName: ai-design-runner
+      imagePullSecrets:
+      - name: huawei-swr-image-pull-secret
+      containers:
+      - name: runner
+        image: ghcr.io/opensourceways-test/om-datacenter:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "/opt/bootstrap/bootstrap.sh"]
+        env:
+        - name: HOME
+          value: /home/runner
+        - name: RUNNER_NAME
+          value: ai-design-runner-k8s
+        - name: RUNNER_LABELS
+          value: "self-hosted,ai-design-runner"
+        - name: RUNNER_GROUP
+          value: "default"
+        - name: DOTNET_SYSTEM_GLOBALIZATION_INVARIANT
+          value: "1"
+        - name: GITHUB_URL
+          valueFrom: { secretKeyRef: { name: backlog-runner-secrets, key: GITHUB_URL } }
+        - name: ACCESS_TOKEN
+          valueFrom: { secretKeyRef: { name: backlog-runner-secrets, key: ACCESS_TOKEN, optional: true } }
+        - name: RUNNER_TOKEN
+          valueFrom: { secretKeyRef: { name: backlog-runner-secrets, key: RUNNER_TOKEN, optional: true } }
+        volumeMounts:
+        - name: bootstrap
+          mountPath: /opt/bootstrap
+        - name: workspaces
+          mountPath: /workspaces
+        resources:
+          requests: { cpu: "500m", memory: 1Gi }
+          limits:   { cpu: "4", memory: 8Gi }
+      volumes:
+      - name: bootstrap
+        configMap: { name: runner-bootstrap, defaultMode: 0755 }
+      - name: workspaces
+        persistentVolumeClaim: { claimName: ai-design-workspaces }
