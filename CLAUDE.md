@@ -41,3 +41,17 @@
 ## 团队规范层引用
 - 团队层规范: agent-development-specification 仓库
 - 流程权威文档: workflow-control-tower/team-end-to-end-process.md
+
+## 提交前校验
+
+提交前请手动检查 Markdown 格式：
+
+```bash
+# 检查格式（CI 在 PR 时自动执行）
+npx prettier --check "**/*.md"
+
+# 自动修复格式问题
+npx prettier --write "**/*.md"
+```
+
+CI（`.github/workflows/markdown-format-check.yml`）在 PR 和 push main 时自动校验 markdown 格式。
