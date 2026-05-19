@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "reason": "阻止 Agent 直接 push main 分支",
+        "hook": "if echo \"$COMMAND\" | grep -qE 'git push.*main|git push.*master'; then echo 'ERROR: Direct push to main/master forbidden. Use PR.'; exit 2; fi"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "reason": "文件改动后自动 lint 检查",
+        "hook": "npx prettier --check \"$FILE\" 2>/dev/null || true"
+      }
+    ]
+  }
+}

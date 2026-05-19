@@ -1,0 +1,22 @@
+name: Issue Triage
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auto label feature requests
+        if: contains(github.event.issue.labels.*.name, 'feature-request')
+        run: |
+          echo "Feature request #${{ github.event.issue.number }} created"
+
+      - name: Generate user brief on /accepts
+        if: contains(github.event.comment.body, '/accepts')
+        run: |
+          echo "Issue accepted. Dispatching to requirements agent..."
+          # TODO: 触发 requirements agent workflow dispatch

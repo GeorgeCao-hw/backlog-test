@@ -1,0 +1,43 @@
+name: Feature Request
+description: 提出新功能需求（Phase 1.1 需求驱动入口）
+title: "[需求] "
+labels: ["feature-request"]
+body:
+  - type: markdown
+    attributes:
+      value: "## 需求信息\n请填写以下信息，RAT 将进行技术评审。"
+  - type: input
+    id: title-field
+    attributes:
+      label: 需求标题
+      description: 一句话概述需求
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 场景说明
+      description: 描述问题场景和痛点（2-3 句话）
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 3-5 条可量化标准，每条一句话
+      placeholder: |
+        1. xxx 功能正常运行
+        2. 响应时间 < xxx ms
+        3. 覆盖率 > xx%
+    validations:
+      required: true
+  - type: checkboxes
+    id: labels
+    attributes:
+      label: 需求相关性标签
+      options:
+        - label: "need_design — 涉及架构/API/拓扑变更"
+        - label: "need_security — 涉及安全（边界变更/凭证/权限/供应链/隐私/AI）"
+        - label: "need_itest — 涉及集成测试（跨组件/核心组件/端到端流程）"
+        - label: "need_ux — 涉及用户体验变更"
+        - label: "need_light — 轻量变更，无需额外文档"
