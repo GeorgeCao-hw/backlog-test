@@ -1,0 +1,135 @@
+name: Test Design on PR Merge
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  detect:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      arch_file: ${{ steps.find.outputs.arch_file }}
+      issue_id: ${{ steps.find.outputs.issue_id }}
+      sr_ar_ok: ${{ steps.check.outputs.sr_ar_ok }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find Architecture Design doc in merged PR
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          arch=$(echo "$files" | grep -E '(^|/)02-architecture\.md$' | head -n1 || true)
+          if [ -z "$arch" ]; then
+            echo "No 02-architecture.md changed in this PR — skipping."
+            echo "arch_file=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Found architecture doc: $arch"
+          echo "arch_file=$arch" >> "$GITHUB_OUTPUT"
+          issue_id=$(echo "$arch" | sed -nE 's|.*issue_docs/([^/]+)/02-architecture\.md|\1|p')
+          echo "issue_id=${issue_id:-pr-$PR}" >> "$GITHUB_OUTPUT"
+
+      - name: Check SR / AR markers in architecture doc
+        id: check
+        if: steps.find.outputs.arch_file != ''
+        run: |
+          file="${{ steps.find.outputs.arch_file }}"
+          has_sr=$(grep -cE '\bSR[-_ 0-9]' "$file" || true)
+          has_ar=$(grep -cE '\bAR[-_ 0-9]' "$file" || true)
+          echo "SR matches: $has_sr"
+          echo "AR matches: $has_ar"
+          if [ "$has_sr" -gt 0 ] && [ "$has_ar" -gt 0 ]; then
+            echo "sr_ar_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sr_ar_ok=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Architecture doc $file is missing SR (大颗粒需求) or AR (小颗粒需求) descriptions."
+            exit 1
+          fi
+
+  generate:
+    needs: detect
+    if: needs.detect.outputs.arch_file != '' && needs.detect.outputs.sr_ar_ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare output directory
+        run: mkdir -p "Test/${{ needs.detect.outputs.issue_id }}"
+
+      - name: Generate test design via Claude Code Action
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          direct_prompt: |
+            阅读架构设计文档：${{ needs.detect.outputs.arch_file }}
+
+            该文档使用 SR (大颗粒需求) 和 AR (小颗粒需求) 描述需求层级。
+            请基于其内容生成两个测试交付件，写入到下列路径：
+
+            1. Test/${{ needs.detect.outputs.issue_id }}/test-design-report.md
+               — 测试设计报告，覆盖：
+                 * 每个 SR 的测试维度（功能 / 安全 / 性能 / 兼容性 / 可靠性 / 可服务性）
+                 * 风险分析与专项验证设计方案
+                 * 测试范围与策略
+
+            2. Test/${{ needs.detect.outputs.issue_id }}/test-cases.md
+               — 详细测试用例，每个 AR 对应一组用例，每条用例包含：
+                 * 用例编号 (TC-<AR编号>-<序号>)
+                 * 前置条件
+                 * 测试步骤
+                 * 预期结果
+                 * 关联的 SR / AR
+
+            遵循 templates/Test/README.md 的结构。仅创建这两个文件，不修改其他内容。
+
+      - name: Format generated markdown with Prettier
+        run: |
+          ISSUE_ID="${{ needs.detect.outputs.issue_id }}"
+          if [ -d "Test/${ISSUE_ID}" ] && ls "Test/${ISSUE_ID}"/*.md >/dev/null 2>&1; then
+            npx --yes prettier --write "Test/${ISSUE_ID}/*.md"
+          else
+            echo "No generated markdown to format."
+          fi
+
+      - name: Create draft PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_ID="${{ needs.detect.outputs.issue_id }}"
+          BRANCH="test-design/${ISSUE_ID}-${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "Test/${ISSUE_ID}"
+          if git diff --cached --quiet; then
+            echo "::warning::Claude did not produce any test docs — nothing to commit."
+            exit 0
+          fi
+          git commit -m "test: auto-generate test design for ${ISSUE_ID}
+
+          Source: PR #${{ github.event.pull_request.number }}
+          Architecture: ${{ needs.detect.outputs.arch_file }}"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --draft \
+            --title "[Test] 测试设计 ${ISSUE_ID}" \
+            --body "由 \`test-design-on-merge\` workflow 基于已合入 PR #${{ github.event.pull_request.number }} 的架构设计文档 \`${{ needs.detect.outputs.arch_file }}\` 自动生成。
+
+          产出：
+          - \`Test/${ISSUE_ID}/test-design-report.md\` — 测试设计报告
+          - \`Test/${ISSUE_ID}/test-cases.md\` — 测试用例
+
+          请人工评审后再标记为 Ready for review。" \
+            --base main \
+            --head "$BRANCH"
