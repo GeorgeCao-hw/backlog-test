@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2A2A2A"/>
+      <stop offset="100%" stop-color="#333333"/>
+    </linearGradient>
+    <linearGradient id="card1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#FBBF24"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="10" y="10" width="180" height="180" rx="24" ry="24" fill="url(#bg)"/>
+
+  <!-- Card 1 (top, with checkmark) -->
+  <rect x="30" y="34" width="140" height="32" rx="6" ry="6" fill="url(#card1)" opacity="0.95"/>
+  <rect x="34" y="38" width="132" height="24" rx="4" ry="4" fill="#333333" opacity="0.15"/>
+
+  <!-- Checkmark circle -->
+  <circle cx="50" cy="50" r="9" fill="#333333"/>
+  <polyline points="45,50 49,54 55,46" fill="none" stroke="#F59E0B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Card 2 (middle) -->
+  <rect x="30" y="84" width="140" height="32" rx="6" ry="6" fill="#444444"/>
+  <rect x="34" y="88" width="100" height="24" rx="4" ry="4" fill="#F59E0B" opacity="0.12"/>
+
+  <!-- Card 3 (bottom) -->
+  <rect x="30" y="134" width="140" height="32" rx="6" ry="6" fill="#444444"/>
+  <rect x="34" y="138" width="80" height="24" rx="4" ry="4" fill="#F59E0B" opacity="0.12"/>
+
+  <!-- Subtle connection dots between cards -->
+  <circle cx="100" cy="74" r="2" fill="#F59E0B" opacity="0.4"/>
+  <circle cx="100" cy="124" r="2" fill="#F59E0B" opacity="0.4"/>
+</svg>
