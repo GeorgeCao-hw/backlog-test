@@ -18,10 +18,18 @@
 - **AR-002**：路径匹配兼容 `Architecture Design/` 与历史拼写 `Architecture Desgin/`。
 - **AR-003**：生成阶段使用占位模板 + sed 替换，避免反引号转义问题。
 
-## 4. 验收说明
+## 4. 功能设计分解TASK清单
+
+| Task ID | 描述                                          | 负责人 |
+| ------- | --------------------------------------------- | ------ |
+| T-001   | 实现 SR/AR → TASK 检查替换                    | bot    |
+| T-002   | workflow 通过 `gh pr view` 拉取改动文件       | bot    |
+| T-003   | 路径匹配兼容 `Architecture Design` / `Desgin` | bot    |
+
+## 5. 验收说明
 
 merge 本 PR 后，预期：
 
-1. workflow 日志出现 `::notice::` 列出 SR-001/SR-002 与 AR-001/AR-002/AR-003。
-2. 自动开出标题为 `docs(test): test design from #<N>` 的草稿 PR。
-3. 草稿 PR 内容为 `issue_docs/999/Test/test-design-report.md` 与 `test-design-cases.md`。
+1. workflow 日志出现 `::notice::` 指向 `功能设计分解TASK清单` 所在行号。
+2. 自动开出标题为 `docs(test): test design from #<N>` 的草稿 PR（或因 token 权限失败但分支已推）。
+3. 分支 `bot/test-docs-from-pr-<N>` 含 `issue_docs/999/Test/test-design-report.md` 与 `test-design-cases.md`。
