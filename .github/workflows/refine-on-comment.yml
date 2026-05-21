@@ -1,0 +1,150 @@
+name: Refine Test Docs On Draft PR Comment
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: refine-pr-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  refine:
+    if: github.event.issue.pull_request != null && github.event.comment.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch PR metadata
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          DATA=$(gh api "/repos/${REPO}/pulls/${PR_NUM}")
+          IS_DRAFT=$(echo "$DATA" | jq -r '.draft')
+          HEAD_REF=$(echo "$DATA" | jq -r '.head.ref')
+          HEAD_REPO=$(echo "$DATA" | jq -r '.head.repo.full_name')
+          echo "is_draft=$IS_DRAFT" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          echo "head_repo=$HEAD_REPO" >> "$GITHUB_OUTPUT"
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "::notice::PR #${PR_NUM} is not a draft; skipping."
+          elif [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::warning::PR #${PR_NUM} head is from fork ($HEAD_REPO); cannot push back. Skipping."
+          fi
+
+      - name: React with 'eyes'
+        if: steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes >/dev/null
+
+      - name: Checkout PR head branch
+        if: steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Locate test design files in PR
+        id: files
+        if: steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUM" --json files -q '.files[].path' > pr-files.txt
+          grep -E '^issue_docs/[^/]+/Test/test-design-(report|cases)\.md$' pr-files.txt > target-files.txt || true
+          if [ ! -s target-files.txt ]; then
+            echo "::notice::No test-design-report.md or test-design-cases.md in this PR; nothing to refine."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "Target files:"
+          cat target-files.txt
+
+      - name: Refine docs with AI agent (stub)
+        if: steps.files.outputs.found == 'true'
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENT_AT: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/refine-note.md
+          import os
+          body = os.environ.get("COMMENT_BODY", "")
+          quoted = "\n".join("> " + ln for ln in body.splitlines()) or "> (empty)"
+          print(f"""
+          ---
+
+          ### 自动修订（占位 stub）
+
+          > 由 GitHub Action 自动写入，待 AI Agent 接入后替换为实际修订内容。
+          > 评论：[{os.environ['COMMENT_URL']}]({os.environ['COMMENT_URL']}) by **@{os.environ['COMMENT_USER']}** at {os.environ['COMMENT_AT']}
+
+          原始评论：
+
+          {quoted}
+          """)
+          PY
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            cat /tmp/refine-note.md >> "$f"
+            echo "appended revision note to $f"
+          done < target-files.txt
+
+      - name: Commit and push to PR branch
+        id: push
+        if: steps.files.outputs.found == 'true'
+        env:
+          PR_NUM: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          while IFS= read -r f; do
+            [ -f "$f" ] && git add -- "$f"
+          done < target-files.txt
+          if git diff --cached --quiet; then
+            echo "No effective changes; skipping push."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "docs(test): refine via comment ${COMMENT_ID} on PR #${PR_NUM}"
+          git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Final reaction
+        if: always() && steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+        run: |
+          if [ "$PUSHED" = "true" ]; then
+            REACT=rocket
+          else
+            REACT=confused
+          fi
+          gh api -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content="$REACT" >/dev/null
