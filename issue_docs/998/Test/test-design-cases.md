@@ -16,3 +16,15 @@
   1. [TODO]
 - **预期结果**：[TODO]
 - **失败处理**：[TODO]
+
+---
+
+### 自动修订（占位 stub）
+
+> 由 GitHub Action 自动写入，待 AI Agent 接入后替换为实际修订内容。
+> 评论：[https://github.com/GeorgeCao-hw/backlog-test/pull/13#issuecomment-4509181883](https://github.com/GeorgeCao-hw/backlog-test/pull/13#issuecomment-4509181883) by **@GeorgeCao-hw** at 2026-05-21T14:20:56Z
+
+原始评论：
+
+> e2e 测试评论：请把 TC-001 的优先级改成 P0，并在测试报告里补一个性能基线条目（响应时间 < 200ms）。
+
