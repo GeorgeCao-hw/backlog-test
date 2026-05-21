@@ -1,0 +1,151 @@
+name: Aggregate Test Deliverables Into Module
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  aggregate:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Find per-issue test deliverables changed in merged PR
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUM" --json files -q '.files[].path' > pr-files.txt
+          grep -E '^issue_docs/[^/]+/Test/test-design-(report|cases)\.md$' pr-files.txt > deliv-files.txt || true
+          if [ ! -s deliv-files.txt ]; then
+            echo "No per-issue test deliverables changed; nothing to aggregate."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          awk -F'/' '{print $2}' deliv-files.txt | sort -u > issue-ids.txt
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Aggregating issues: $(paste -sd, issue-ids.txt)"
+          cat issue-ids.txt
+
+      - name: Merge into module-level test deliverable
+        if: steps.scan.outputs.found == 'true'
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          mkdir -p Test
+          python3 <<'PY'
+          import os, pathlib, re
+
+          MODULE_FILE = pathlib.Path("Test/module-test-design.md")
+          HEADER = (
+              "# 模块测试设计交付件\n\n"
+              "> 由 `aggregate-module-test` workflow 自动维护。\n"
+              "> 每次有 `issue_docs/<id>/Test/test-design-{report,cases}.md` 合入时，对应 issue 的 section 会被替换。\n\n"
+          )
+
+          def section(issue_id, report, cases, pr_num, pr_url, pr_title):
+              return (
+                  f"<!-- BEGIN issue-{issue_id} -->\n"
+                  f"## Issue #{issue_id}\n\n"
+                  f"> 来源 PR：[#{pr_num}]({pr_url}) — {pr_title}\n\n"
+                  f"### 测试设计报告\n\n"
+                  f"{(report.strip() if report else '_(无报告)_')}\n\n"
+                  f"### 测试设计用例\n\n"
+                  f"{(cases.strip() if cases else '_(无用例)_')}\n\n"
+                  f"<!-- END issue-{issue_id} -->\n\n"
+              )
+
+          if MODULE_FILE.exists():
+              content = MODULE_FILE.read_text(encoding="utf-8")
+              if not content.lstrip().startswith("# 模块测试设计交付件"):
+                  content = HEADER + content
+          else:
+              content = HEADER
+
+          issue_ids = [
+              ln.strip()
+              for ln in pathlib.Path("issue-ids.txt").read_text().splitlines()
+              if ln.strip()
+          ]
+
+          for issue_id in issue_ids:
+              report_path = pathlib.Path(f"issue_docs/{issue_id}/Test/test-design-report.md")
+              cases_path = pathlib.Path(f"issue_docs/{issue_id}/Test/test-design-cases.md")
+              report = report_path.read_text(encoding="utf-8") if report_path.exists() else None
+              cases = cases_path.read_text(encoding="utf-8") if cases_path.exists() else None
+              new_section = section(
+                  issue_id, report, cases,
+                  os.environ["PR_NUM"], os.environ["PR_URL"], os.environ["PR_TITLE"],
+              )
+              marker_begin = f"<!-- BEGIN issue-{issue_id} -->"
+              marker_end = f"<!-- END issue-{issue_id} -->"
+              if marker_begin in content and marker_end in content:
+                  pattern = re.compile(
+                      re.escape(marker_begin) + r".*?" + re.escape(marker_end) + r"\s*",
+                      re.DOTALL,
+                  )
+                  content = pattern.sub(new_section, content, count=1)
+                  print(f"replaced section for #{issue_id}")
+              else:
+                  content = content.rstrip() + "\n\n" + new_section
+                  print(f"appended section for #{issue_id}")
+
+          MODULE_FILE.write_text(content, encoding="utf-8")
+          print(f"wrote {MODULE_FILE} ({len(content)} bytes)")
+          PY
+
+      - name: Open draft PR with updated module file
+        if: steps.scan.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          BRANCH="bot/aggregate-module-test-${PR_NUM}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add Test/module-test-design.md
+          if git diff --cached --quiet; then
+            echo "Module file unchanged (already up-to-date)."
+            exit 0
+          fi
+          ISSUES=$(paste -sd, issue-ids.txt)
+          git commit -m "docs(test): aggregate module test design for #${ISSUES} from PR #${PR_NUM}"
+          git push -u origin "$BRANCH"
+
+          cat > pr-body.md <<EOF
+          Auto-generated draft from merged PR [#${PR_NUM}](${PR_URL}) — ${PR_TITLE}.
+
+          Aggregates per-issue test deliverables into the module-level unified file.
+
+          - Issues updated: \`${ISSUES}\`
+          - Target file: \`Test/module-test-design.md\`
+          - Sections are bounded by \`<!-- BEGIN issue-<id> -->\` / \`<!-- END issue-<id> -->\` markers and are idempotently replaced on each run.
+
+          Stub aggregation — replace content rendering with AI Agent output later if needed.
+          EOF
+
+          gh pr create \
+            --draft \
+            --base "$BASE_REF" \
+            --head "$BRANCH" \
+            --title "docs(test): aggregate module test design (#${ISSUES})" \
+            --body-file pr-body.md
