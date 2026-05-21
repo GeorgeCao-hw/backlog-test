@@ -1,0 +1,180 @@
+name: Generate Test Docs From Architecture
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Find Architecture Design files changed in merged PR
+        id: arch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUM" --json files -q '.files[].path' > pr-files.txt
+          grep -E '^issue_docs/[^/]+/Architecture (Design|Desgin)/.+\.md$' pr-files.txt > arch-files.txt || true
+          if [ ! -s arch-files.txt ]; then
+            echo "No Architecture Design markdown changed; nothing to do."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Architecture files detected:"
+          cat arch-files.txt
+
+      - name: Check SR/AR descriptions
+        if: steps.arch.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          while IFS= read -r f; do
+            if [ ! -f "$f" ]; then
+              echo "::warning file=$f::file missing on base branch (deleted in PR?)"
+              continue
+            fi
+            SR_HITS=$(grep -Eo '\bSR[-_ ]?[0-9]+\b' "$f" | sort -u | paste -sd, -)
+            AR_HITS=$(grep -Eo '\bAR[-_ ]?[0-9]+\b' "$f" | sort -u | paste -sd, -)
+            if [ -z "$SR_HITS" ] && [ -z "$AR_HITS" ]; then
+              echo "::warning file=$f::No SR/AR identifiers found (expected pattern SR-001 / AR-001)"
+            else
+              echo "::notice file=$f::SR=[${SR_HITS:-<none>}] AR=[${AR_HITS:-<none>}]"
+            fi
+          done < arch-files.txt
+
+      - name: Generate test design docs (stub)
+        if: steps.arch.outputs.found == 'true'
+        id: gen
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          : > generated-files.txt
+          while IFS= read -r f; do
+            issue_id=$(echo "$f" | awk -F'/' '{print $2}')
+            test_dir="issue_docs/${issue_id}/Test"
+            mkdir -p "$test_dir"
+
+            report="${test_dir}/test-design-report.md"
+            cases="${test_dir}/test-design-cases.md"
+
+            cat > "$report" <<'TPL'
+          # __ISSUE_ID__ 测试设计报告
+
+          > 由 GitHub Action 自动生成（占位 stub，待 AI Agent 接入后替换）。
+          > 源架构文档：`__ARCH_FILE__`
+          > 触发 PR：[#__PR_NUM__](__PR_URL__) — __PR_TITLE__
+
+          ## 1. 范围与目标
+
+          - [TODO] 汇总架构文档中的 SR/AR，圈定本次测试覆盖范围
+          - [TODO] 列出关键验证目标（功能/性能/安全/兼容性）
+
+          ## 2. 测试策略
+
+          - [TODO] 测试层级（单元 / 集成 / 端到端）
+          - [TODO] 测试环境与数据准备
+          - [TODO] 风险与假设
+
+          ## 3. 覆盖矩阵
+
+          | SR/AR | 描述 | 测试用例 ID | 优先级 |
+          | ----- | ---- | ----------- | ------ |
+          | TODO  | TODO | TODO        | TODO   |
+
+          ## 4. 准入/准出条件
+
+          - 准入：[TODO]
+          - 准出：[TODO]
+          TPL
+
+            cat > "$cases" <<'TPL'
+          # __ISSUE_ID__ 测试设计用例
+
+          > 由 GitHub Action 自动生成（占位 stub，待 AI Agent 接入后替换）。
+          > 源架构文档：`__ARCH_FILE__`
+
+          ## 用例索引
+
+          | 用例 ID | 关联 SR/AR | 标题 | 优先级 | 类型 |
+          | ------- | ---------- | ---- | ------ | ---- |
+          | TC-001  | TODO       | TODO | TODO   | TODO |
+
+          ## TC-001 [TODO 用例标题]
+
+          - **前置条件**：[TODO]
+          - **步骤**：
+            1. [TODO]
+          - **预期结果**：[TODO]
+          - **失败处理**：[TODO]
+          TPL
+
+            sed -i \
+              -e "s|__ISSUE_ID__|#${issue_id}|g" \
+              -e "s|__ARCH_FILE__|${f}|g" \
+              -e "s|__PR_NUM__|${PR_NUM}|g" \
+              -e "s|__PR_URL__|${PR_URL}|g" \
+              -e "s|__PR_TITLE__|${PR_TITLE}|g" \
+              "$report" "$cases"
+
+            echo "$report" >> generated-files.txt
+            echo "$cases" >> generated-files.txt
+          done < arch-files.txt
+
+          echo "count=$(wc -l < generated-files.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Open draft PR with generated test docs
+        if: steps.gen.outputs.count != '' && steps.gen.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          BRANCH="bot/test-docs-from-pr-${PR_NUM}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          while IFS= read -r p; do git add -- "$p"; done < generated-files.txt
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "docs(test): generate stub test design docs from PR #${PR_NUM}"
+          git push -u origin "$BRANCH"
+
+          cat > pr-body.md <<EOF
+          Auto-generated draft from merged PR [#${PR_NUM}](${PR_URL}) — ${PR_TITLE}.
+
+          Source architecture file(s):
+
+          \`\`\`
+          $(cat arch-files.txt)
+          \`\`\`
+
+          Stub content — replace with AI Agent output once wired up.
+          EOF
+
+          gh pr create \
+            --draft \
+            --base "$BASE_REF" \
+            --head "$BRANCH" \
+            --title "docs(test): test design from #${PR_NUM}" \
+            --body-file pr-body.md
