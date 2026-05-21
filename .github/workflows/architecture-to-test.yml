@@ -37,7 +37,7 @@ jobs:
           echo "::notice::Architecture files detected:"
           cat arch-files.txt
 
-      - name: Check SR/AR descriptions
+      - name: Check 功能设计分解 TASK 清单 section
         if: steps.arch.outputs.found == 'true'
         run: |
           set -euo pipefail
@@ -46,12 +46,12 @@ jobs:
               echo "::warning file=$f::file missing on base branch (deleted in PR?)"
               continue
             fi
-            SR_HITS=$(grep -Eo '\bSR[-_ ]?[0-9]+\b' "$f" | sort -u | paste -sd, -)
-            AR_HITS=$(grep -Eo '\bAR[-_ ]?[0-9]+\b' "$f" | sort -u | paste -sd, -)
-            if [ -z "$SR_HITS" ] && [ -z "$AR_HITS" ]; then
-              echo "::warning file=$f::No SR/AR identifiers found (expected pattern SR-001 / AR-001)"
+            # Tolerate whitespace between 中文 and TASK 清单 (canonical heading is "功能设计分解TASK清单" but allow spaces).
+            if grep -Eq '功能设计分解[[:space:]]*TASK[[:space:]]*清单' "$f"; then
+              line=$(grep -nE '功能设计分解[[:space:]]*TASK[[:space:]]*清单' "$f" | head -1 | cut -d: -f1)
+              echo "::notice file=$f,line=${line}::Found '功能设计分解 TASK 清单' section"
             else
-              echo "::notice file=$f::SR=[${SR_HITS:-<none>}] AR=[${AR_HITS:-<none>}]"
+              echo "::warning file=$f::Missing '功能设计分解 TASK 清单' section in architecture doc"
             fi
           done < arch-files.txt
 
