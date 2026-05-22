@@ -77,7 +77,22 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
-          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode CLI not found on runner PATH"; exit 1; }
+          # Extend PATH with common opencode install locations (the upstream
+          # installer drops the binary in ~/.opencode/bin by default).
+          export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+          if ! command -v opencode >/dev/null 2>&1; then
+            echo "::group::opencode discovery diagnostics"
+            echo "whoami=$(whoami) HOME=$HOME"
+            echo "PATH=$PATH"
+            for c in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" /usr/local/bin/opencode /opt/opencode/bin/opencode; do
+              echo "checking $c: $([ -x "$c" ] && echo executable || echo missing)"
+            done
+            echo "system-wide search (best effort, truncated):"
+            find / -name opencode -type f 2>/dev/null | head -5 || true
+            echo "::endgroup::"
+            echo "::error::opencode CLI not found on runner PATH after extension"
+            exit 1
+          fi
           opencode --version || true
           python3 - <<'PY'
           import os, pathlib, subprocess, sys
