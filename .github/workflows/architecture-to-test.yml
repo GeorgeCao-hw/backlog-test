@@ -26,7 +26,8 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUM" --json files -q '.files[].path' > pr-files.txt
+          # Skip files removed by the PR — re-generating stubs for deleted issue dirs would resurrect them.
+          gh pr view "$PR_NUM" --json files -q '.files[] | select(.status != "removed") | .path' > pr-files.txt
           grep -E '^issue_docs/[^/]+/Architecture (Design|Desgin)/.+\.md$' pr-files.txt > arch-files.txt || true
           if [ ! -s arch-files.txt ]; then
             echo "No Architecture Design markdown changed; nothing to do."

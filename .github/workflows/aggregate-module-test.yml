@@ -26,7 +26,8 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUM" --json files -q '.files[].path' > pr-files.txt
+          # Skip files removed by the PR — re-aggregating deleted issue sections would resurrect them.
+          gh pr view "$PR_NUM" --json files -q '.files[] | select(.status != "removed") | .path' > pr-files.txt
           grep -E '^issue_docs/[^/]+/Test/test-design-(report|cases)\.md$' pr-files.txt > deliv-files.txt || true
           if [ ! -s deliv-files.txt ]; then
             echo "No per-issue test deliverables changed; nothing to aggregate."
