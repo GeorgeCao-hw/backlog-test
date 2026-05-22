@@ -11,7 +11,7 @@ permissions:
 jobs:
   generate:
     if: github.event.pull_request.merged == true
-    runs-on: ai-dev-runner
+    runs-on: [self-hosted, ai-dev-runner]
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v4
@@ -68,32 +68,37 @@ jobs:
           curl -fsSL "$SPEC_TEMPLATE_URL"     -o /tmp/test-templates/test-specification.md
           wc -c /tmp/test-templates/*.md
 
+      - name: Setup opencode
+        if: steps.arch.outputs.found == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if ! command -v opencode >/dev/null 2>&1; then
+            npm install -g opencode-ai || curl -fsSL https://opencode.ai/install | bash
+          fi
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.opencode/bin:$PATH"
+          command -v opencode || { echo "::error::opencode install failed"; exit 1; }
+          opencode --version || true
+          mkdir -p "$HOME/.local/share/opencode" "$HOME/.config/opencode"
+          printf '{"alibaba-cn":{"type":"api","key":"%s"}}\n' "$OPENCODE_API_KEY" > "$HOME/.local/share/opencode/auth.json"
+          chmod 600 "$HOME/.local/share/opencode/auth.json"
+          printf '{"$schema":"https://opencode.ai/config.json"}\n' > "$HOME/.config/opencode/opencode.json"
+
       - name: Generate test design docs via opencode
         if: steps.arch.outputs.found == 'true'
         id: gen
         env:
+          HOME: /home/runner
           PR_NUM: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          OPENCODE_MODEL: alibaba-cn/glm-5
         run: |
           set -euo pipefail
-          # Extend PATH with common opencode install locations (the upstream
-          # installer drops the binary in ~/.opencode/bin by default).
-          export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
-          if ! command -v opencode >/dev/null 2>&1; then
-            echo "::group::opencode discovery diagnostics"
-            echo "whoami=$(whoami) HOME=$HOME"
-            echo "PATH=$PATH"
-            for c in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" /usr/local/bin/opencode /opt/opencode/bin/opencode; do
-              echo "checking $c: $([ -x "$c" ] && echo executable || echo missing)"
-            done
-            echo "system-wide search (best effort, truncated):"
-            find / -name opencode -type f 2>/dev/null | head -5 || true
-            echo "::endgroup::"
-            echo "::error::opencode CLI not found on runner PATH after extension"
-            exit 1
-          fi
-          opencode --version || true
+          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing from PATH after Setup step"; exit 1; }
           python3 - <<'PY'
           import os, pathlib, subprocess, sys
 
@@ -149,7 +154,11 @@ jobs:
               print(prompt)
               print("::endgroup::", flush=True)
 
-              cmd = ["opencode", "run", prompt]
+              cmd = [
+                  "opencode", "run",
+                  "--model", os.environ.get("OPENCODE_MODEL", "alibaba-cn/glm-5"),
+                  prompt,
+              ]
               r = subprocess.run(cmd, text=True)
               if r.returncode != 0:
                   print(f"::error::opencode exited {r.returncode} for #{issue_id}", file=sys.stderr)
