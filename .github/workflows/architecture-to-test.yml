@@ -11,7 +11,7 @@ permissions:
 jobs:
   generate:
     if: github.event.pull_request.merged == true
-    runs-on: ai-dev-runner-78bf544c5c-4z5gj
+    runs-on: ai-dev-runner
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v4
