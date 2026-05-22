@@ -1,4 +1,4 @@
-name: Generate Test Docs From Architecture
+name: 测试设计与测试用例
 
 on:
   pull_request:
