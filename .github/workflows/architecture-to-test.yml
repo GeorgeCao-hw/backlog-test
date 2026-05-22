@@ -68,7 +68,7 @@ jobs:
           curl -fsSL "$SPEC_TEMPLATE_URL"     -o /tmp/test-templates/test-specification.md
           wc -c /tmp/test-templates/*.md
 
-      - name: Generate test design docs via Claude Code
+      - name: Generate test design docs via opencode
         if: steps.arch.outputs.found == 'true'
         id: gen
         env:
@@ -77,8 +77,8 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
-          command -v claude >/dev/null 2>&1 || { echo "::error::claude CLI not found on runner PATH"; exit 1; }
-          claude --version || true
+          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode CLI not found on runner PATH"; exit 1; }
+          opencode --version || true
           python3 - <<'PY'
           import os, pathlib, subprocess, sys
 
@@ -130,18 +130,14 @@ jobs:
               ]
               prompt = "\n".join(prompt_lines)
 
-              print(f"::group::Claude prompt for #{issue_id}")
+              print(f"::group::opencode prompt for #{issue_id}")
               print(prompt)
               print("::endgroup::", flush=True)
 
-              cmd = [
-                  "claude", "-p", prompt,
-                  "--permission-mode", "bypassPermissions",
-                  "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash",
-              ]
+              cmd = ["opencode", "run", prompt]
               r = subprocess.run(cmd, text=True)
               if r.returncode != 0:
-                  print(f"::error::claude exited {r.returncode} for #{issue_id}", file=sys.stderr)
+                  print(f"::error::opencode exited {r.returncode} for #{issue_id}", file=sys.stderr)
                   sys.exit(r.returncode)
 
               missing = []
