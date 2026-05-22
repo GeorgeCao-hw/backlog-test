@@ -1,4 +1,4 @@
-name: Issue Triage
+name: 测试交付件修复
 on:
   issues:
     types: [opened, labeled]
