@@ -1,0 +1,269 @@
+name: 模块测试集成
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  aggregate:
+    if: github.event.pull_request.merged == true
+    runs-on: [self-hosted, ai-dev-runner]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout backlog
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Find per-issue test deliverables in merged PR
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUM" --json files \
+            -q '.files[] | select(.status != "removed") | .path' > pr-files.txt
+          grep -E '^issue_docs/[^/]+/Test/test-design-(report|cases)\.md$' pr-files.txt > deliv-files.txt || true
+          if [ ! -s deliv-files.txt ]; then
+            echo "::notice::No per-issue test deliverables changed; nothing to aggregate."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          awk -F'/' '{print $2}' deliv-files.txt | sort -u > issue-ids.txt
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Affected issues: $(paste -sd, issue-ids.txt)"
+
+      - name: Extract module per issue
+        if: steps.scan.outputs.found == 'true'
+        id: modules
+        run: |
+          set -euo pipefail
+          : > issue-module-map.txt
+          while IFS= read -r issue_id; do
+            f="issue_docs/${issue_id}/Test/test-design-report.md"
+            if [ ! -f "$f" ]; then
+              echo "::warning::missing $f"
+              continue
+            fi
+            mod=$(awk '
+              /^## 模块归属/{found=1; next}
+              found && /^## /{found=0}
+              found && /^[[:space:]]*-?[[:space:]]*\**module\**[[:space:]]*:[[:space:]]*[^[:space:]]/{
+                sub(/^[[:space:]]*-?[[:space:]]*\**module\**[[:space:]]*:[[:space:]]*/, "");
+                sub(/[[:space:]]+$/, "");
+                print; exit
+              }
+              found && /^[^[:space:]#-]/{
+                print; exit
+              }' "$f")
+            mod=$(echo "$mod" | tr -d '`' | tr -d '"' | awk '{print $1}')
+            if [ -z "$mod" ]; then
+              echo "::warning file=$f::missing '## 模块归属' section or 'module: <name>' line — skipping"
+              continue
+            fi
+            echo "$issue_id $mod" >> issue-module-map.txt
+            echo "::notice::#${issue_id} → module=${mod}"
+          done < issue-ids.txt
+          if [ ! -s issue-module-map.txt ]; then
+            echo "::warning::no modules extracted; aborting"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Test templates from spec repo
+        if: steps.modules.outputs.found == 'true'
+        env:
+          STRATEGY_TEMPLATE_URL: https://raw.githubusercontent.com/agentic-develop-playground/agent-development-specification/main/spec/teams/templates/Test/%231%20Test%20Strategy.md
+          SPEC_TEMPLATE_URL: https://raw.githubusercontent.com/agentic-develop-playground/agent-development-specification/main/spec/teams/templates/Test/%231%20Test%20Specification.md
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/test-templates
+          curl -fsSL "$STRATEGY_TEMPLATE_URL" -o /tmp/test-templates/test-strategy.md
+          curl -fsSL "$SPEC_TEMPLATE_URL"     -o /tmp/test-templates/test-specification.md
+          wc -c /tmp/test-templates/*.md
+
+      - name: Setup opencode
+        if: steps.modules.outputs.found == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if ! command -v opencode >/dev/null 2>&1; then
+            npm install -g opencode-ai || curl -fsSL https://opencode.ai/install | bash
+          fi
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.opencode/bin:$PATH"
+          command -v opencode || { echo "::error::opencode install failed"; exit 1; }
+          opencode --version || true
+          mkdir -p "$HOME/.local/share/opencode" "$HOME/.config/opencode"
+          printf '{"alibaba-cn":{"type":"api","key":"%s"}}\n' "$OPENCODE_API_KEY" > "$HOME/.local/share/opencode/auth.json"
+          chmod 600 "$HOME/.local/share/opencode/auth.json"
+          printf '{"$schema":"https://opencode.ai/config.json"}\n' > "$HOME/.config/opencode/opencode.json"
+
+      - name: Clone integration-tests
+        if: steps.modules.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/it
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/agentic-develop-playground/integration-tests.git" /tmp/it
+          ls /tmp/it/service/ || true
+
+      - name: Merge per-issue deliverables into module files via opencode
+        if: steps.modules.outputs.found == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_MODEL: alibaba-cn/glm-5
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing from PATH after Setup"; exit 1; }
+          python3 - <<'PY'
+          import os, pathlib, subprocess, sys
+
+          PR_NUM = os.environ["PR_NUM"]
+          PR_URL = os.environ["PR_URL"]
+          PR_TITLE = os.environ["PR_TITLE"]
+          IT_ROOT = pathlib.Path("/tmp/it")
+
+          mod_to_issues = {}
+          for line in pathlib.Path("issue-module-map.txt").read_text().splitlines():
+              if not line.strip():
+                  continue
+              parts = line.split(None, 1)
+              if len(parts) < 2:
+                  continue
+              issue_id, mod = parts[0], parts[1].strip()
+              mod_to_issues.setdefault(mod, []).append(issue_id)
+
+          touched_modules = []
+          for mod, issues in mod_to_issues.items():
+              mod_dir = IT_ROOT / "service" / mod
+              mod_dir.mkdir(parents=True, exist_ok=True)
+              strategy_path = mod_dir / "TestStrategy.md"
+              cases_path = mod_dir / "TestCases.md"
+              strategy_exists = strategy_path.exists() and strategy_path.stat().st_size > 0
+              cases_exists = cases_path.exists() and cases_path.stat().st_size > 0
+
+              prompt_lines = [
+                  "你是测试集成 agent。本次任务必须一次性跑完，全流程无需任何人工确认。",
+                  "",
+                  f"【目标模块】service/{mod}/",
+                  "",
+                  "【模块已有交付件】（请使用 Read 读取后再决定融合方式）",
+                  f"- 模块测试策略：{strategy_path}  ({'已存在，融合' if strategy_exists else '不存在，使用模板新建'})",
+                  f"- 模块全量用例：{cases_path}    ({'已存在，融合' if cases_exists else '不存在，使用模板新建'})",
+                  "",
+                  "【上游模板（已不存在时用作骨架）】",
+                  "- 测试策略模板：/tmp/test-templates/test-strategy.md",
+                  "- 测试用例规约模板：/tmp/test-templates/test-specification.md",
+                  "",
+                  f"【本次合入的单需求交付件】（涉及 issue：{', '.join(issues)}）",
+              ]
+              for issue_id in issues:
+                  prompt_lines += [
+                      f"- 需求测试策略：issue_docs/{issue_id}/Test/test-design-report.md",
+                      f"- 需求测试用例：issue_docs/{issue_id}/Test/test-design-cases.md",
+                  ]
+              prompt_lines += [
+                  "",
+                  "【输出文件】（必须使用 Write 工具完整写出）",
+                  "",
+                  f"1. {strategy_path}",
+                  "   - 沿用模块测试策略已有的整体结构（章节布局）；模块文件不存在时用 /tmp/test-templates/test-strategy.md 作骨架。",
+                  "   - 把每个单需求测试策略的要点融入对应章节；既有内容不要删除，新条目以追加方式呈现。",
+                  f"   - 文件顶部维护一段「更新记录」表格：每次新增一行，列出 PR 号、issue 列表、合入时间。本次：PR [#{PR_NUM}]({PR_URL})，issues={', '.join(issues)}。",
+                  "",
+                  f"2. {cases_path}",
+                  "   - 表格列结构与模块全量用例保持一致；模块文件不存在时用 /tmp/test-templates/test-specification.md 字段定义作约束。",
+                  "   - 单需求用例追加到模块全量用例末尾，不要删除既有用例。",
+                  f"   - 用例 ID 与既有冲突时，给新加入条目加 `.pr-{PR_NUM}` 后缀避免覆盖。",
+                  "",
+                  "只产出这两个文件，不要修改其他文件，不要询问、不要回复多余信息。",
+              ]
+              prompt = "\n".join(prompt_lines)
+
+              print(f"::group::opencode prompt for module={mod}")
+              print(prompt)
+              print("::endgroup::", flush=True)
+
+              cmd = [
+                  "opencode", "run",
+                  "--model", os.environ.get("OPENCODE_MODEL", "alibaba-cn/glm-5"),
+                  "--agent", "build",
+                  "--dangerously-skip-permissions",
+                  "--thinking=false",
+                  prompt,
+              ]
+              r = subprocess.run(cmd, text=True)
+              if r.returncode != 0:
+                  print(f"::error::opencode exited {r.returncode} for module={mod}", file=sys.stderr)
+                  sys.exit(r.returncode)
+
+              missing = []
+              if not strategy_path.is_file() or strategy_path.stat().st_size == 0:
+                  missing.append(str(strategy_path))
+              if not cases_path.is_file() or cases_path.stat().st_size == 0:
+                  missing.append(str(cases_path))
+              if missing:
+                  print(f"::error::expected files missing/empty for module={mod}: {', '.join(missing)}", file=sys.stderr)
+                  sys.exit(1)
+
+              touched_modules.append(mod)
+              print(f"::notice::merged module={mod} (strategy={strategy_path.stat().st_size}B cases={cases_path.stat().st_size}B)")
+
+          pathlib.Path("touched-modules.txt").write_text("\n".join(touched_modules) + "\n")
+          PY
+
+      - name: Open draft PR to integration-tests
+        if: steps.modules.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          cd /tmp/it
+          BRANCH="bot/aggregate-from-backlog-pr-${PR_NUM}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          while IFS= read -r mod; do
+            [ -z "$mod" ] && continue
+            git add "service/$mod/TestStrategy.md" "service/$mod/TestCases.md" || true
+          done < "$GITHUB_WORKSPACE/touched-modules.txt"
+          if git diff --cached --quiet; then
+            echo "::notice::No effective changes; skipping PR."
+            exit 0
+          fi
+          MODS=$(paste -sd, "$GITHUB_WORKSPACE/touched-modules.txt")
+          git commit -m "docs(test): integrate test deliverables from backlog PR #${PR_NUM} (modules: ${MODS})"
+          git push -u origin "$BRANCH"
+
+          cat > /tmp/pr-body.md <<EOF
+          Auto-generated draft from merged backlog PR [#${PR_NUM}](${PR_URL}) — ${PR_TITLE}.
+
+          Modules updated: \`${MODS}\`
+
+          Per-issue test deliverables from backlog were merged via opencode into each module's \`TestStrategy.md\` + \`TestCases.md\`. Existing module content was preserved; new entries were appended.
+          EOF
+
+          gh pr create \
+            --draft \
+            --base main \
+            --head "$BRANCH" \
+            --title "docs(test): integrate from backlog #${PR_NUM} (${MODS})" \
+            --body-file /tmp/pr-body.md \
+            --repo agentic-develop-playground/integration-tests
