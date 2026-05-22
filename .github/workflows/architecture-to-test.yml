@@ -157,6 +157,9 @@ jobs:
               cmd = [
                   "opencode", "run",
                   "--model", os.environ.get("OPENCODE_MODEL", "alibaba-cn/glm-5"),
+                  "--agent", "build",
+                  "--dangerously-skip-permissions",
+                  "--thinking=false",
                   prompt,
               ]
               r = subprocess.run(cmd, text=True)
