@@ -56,86 +56,76 @@ jobs:
             fi
           done < arch-files.txt
 
-      - name: Generate test design docs (stub)
+      - name: Generate test design docs from spec templates
         if: steps.arch.outputs.found == 'true'
         id: gen
         env:
           PR_NUM: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          STRATEGY_TEMPLATE_URL: https://raw.githubusercontent.com/agentic-develop-playground/agent-development-specification/main/spec/teams/templates/Test/%231%20Test%20Strategy.md
+          SPEC_TEMPLATE_URL: https://raw.githubusercontent.com/agentic-develop-playground/agent-development-specification/main/spec/teams/templates/Test/%231%20Test%20Specification.md
         run: |
           set -euo pipefail
-          : > generated-files.txt
-          while IFS= read -r f; do
-            issue_id=$(echo "$f" | awk -F'/' '{print $2}')
-            test_dir="issue_docs/${issue_id}/Test"
-            mkdir -p "$test_dir"
+          python3 - <<'PY'
+          import os, pathlib, urllib.request
 
-            report="${test_dir}/test-design-report.md"
-            cases="${test_dir}/test-design-cases.md"
+          def fetch(url):
+              with urllib.request.urlopen(url, timeout=30) as r:
+                  return r.read().decode("utf-8")
 
-            cat > "$report" <<'TPL'
-          # __ISSUE_ID__ 测试设计报告
+          def render(template, old_title, new_title, arch_file):
+              body = template.replace(old_title, new_title, 1)
+              header = (
+                  f"> 由 GitHub Action 自动生成（模板来自 agent-development-specification spec/teams/templates/Test/）。\n"
+                  f"> 源架构文档：`{arch_file}`\n"
+                  f"> 触发 PR：[#{os.environ['PR_NUM']}]({os.environ['PR_URL']}) — {os.environ['PR_TITLE']}\n\n"
+              )
+              lines = body.splitlines(keepends=True)
+              out, inserted = [], False
+              for ln in lines:
+                  out.append(ln)
+                  if not inserted and ln.startswith("# "):
+                      out.append("\n")
+                      out.append(header)
+                      inserted = True
+              return "".join(out)
 
-          > 由 GitHub Action 自动生成（占位 stub，待 AI Agent 接入后替换）。
-          > 源架构文档：`__ARCH_FILE__`
-          > 触发 PR：[#__PR_NUM__](__PR_URL__) — __PR_TITLE__
+          strategy_tpl = fetch(os.environ["STRATEGY_TEMPLATE_URL"])
+          spec_tpl = fetch(os.environ["SPEC_TEMPLATE_URL"])
 
-          ## 1. 范围与目标
+          arch_lines = [
+              l for l in pathlib.Path("arch-files.txt").read_text().splitlines() if l.strip()
+          ]
 
-          - [TODO] 汇总架构文档中的 SR/AR，圈定本次测试覆盖范围
-          - [TODO] 列出关键验证目标（功能/性能/安全/兼容性）
-
-          ## 2. 测试策略
-
-          - [TODO] 测试层级（单元 / 集成 / 端到端）
-          - [TODO] 测试环境与数据准备
-          - [TODO] 风险与假设
-
-          ## 3. 覆盖矩阵
-
-          | SR/AR | 描述 | 测试用例 ID | 优先级 |
-          | ----- | ---- | ----------- | ------ |
-          | TODO  | TODO | TODO        | TODO   |
-
-          ## 4. 准入/准出条件
-
-          - 准入：[TODO]
-          - 准出：[TODO]
-          TPL
-
-            cat > "$cases" <<'TPL'
-          # __ISSUE_ID__ 测试设计用例
-
-          > 由 GitHub Action 自动生成（占位 stub，待 AI Agent 接入后替换）。
-          > 源架构文档：`__ARCH_FILE__`
-
-          ## 用例索引
-
-          | 用例 ID | 关联 SR/AR | 标题 | 优先级 | 类型 |
-          | ------- | ---------- | ---- | ------ | ---- |
-          | TC-001  | TODO       | TODO | TODO   | TODO |
-
-          ## TC-001 [TODO 用例标题]
-
-          - **前置条件**：[TODO]
-          - **步骤**：
-            1. [TODO]
-          - **预期结果**：[TODO]
-          - **失败处理**：[TODO]
-          TPL
-
-            sed -i \
-              -e "s|__ISSUE_ID__|#${issue_id}|g" \
-              -e "s|__ARCH_FILE__|${f}|g" \
-              -e "s|__PR_NUM__|${PR_NUM}|g" \
-              -e "s|__PR_URL__|${PR_URL}|g" \
-              -e "s|__PR_TITLE__|${PR_TITLE}|g" \
-              "$report" "$cases"
-
-            echo "$report" >> generated-files.txt
-            echo "$cases" >> generated-files.txt
-          done < arch-files.txt
+          with pathlib.Path("generated-files.txt").open("w") as gen_log:
+              for arch_path in arch_lines:
+                  issue_id = arch_path.split("/")[1]
+                  test_dir = pathlib.Path(f"issue_docs/{issue_id}/Test")
+                  test_dir.mkdir(parents=True, exist_ok=True)
+                  report_path = test_dir / "test-design-report.md"
+                  cases_path = test_dir / "test-design-cases.md"
+                  report_path.write_text(
+                      render(
+                          strategy_tpl,
+                          "# #1 [需求名称] 测试策略设计说明书",
+                          f"# #{issue_id} 测试策略设计说明书",
+                          arch_path,
+                      ),
+                      encoding="utf-8",
+                  )
+                  cases_path.write_text(
+                      render(
+                          spec_tpl,
+                          "# #1 Test Specification",
+                          f"# #{issue_id} Test Specification",
+                          arch_path,
+                      ),
+                      encoding="utf-8",
+                  )
+                  gen_log.write(f"{report_path}\n{cases_path}\n")
+                  print(f"generated for #{issue_id}: {report_path}, {cases_path}")
+          PY
 
           echo "count=$(wc -l < generated-files.txt)" >> "$GITHUB_OUTPUT"
 
