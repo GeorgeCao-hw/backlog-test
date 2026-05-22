@@ -59,13 +59,16 @@ jobs:
       - name: Fetch Test templates from spec repo
         if: steps.arch.outputs.found == 'true'
         env:
-          STRATEGY_TEMPLATE_URL: https://raw.githubusercontent.com/agentic-develop-playground/agent-development-specification/main/spec/teams/templates/Test/%231%20Test%20Strategy.md
-          SPEC_TEMPLATE_URL: https://raw.githubusercontent.com/agentic-develop-playground/agent-development-specification/main/spec/teams/templates/Test/%231%20Test%20Specification.md
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          SPEC_REPO: agentic-develop-playground/agent-development-specification
         run: |
           set -euo pipefail
           mkdir -p /tmp/test-templates
-          curl -fsSL "$STRATEGY_TEMPLATE_URL" -o /tmp/test-templates/test-strategy.md
-          curl -fsSL "$SPEC_TEMPLATE_URL"     -o /tmp/test-templates/test-specification.md
+          # spec repo is private; raw.githubusercontent.com returns 404 for anon → use authenticated contents API with raw Accept header.
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/templates/Test/%231%20Test%20Strategy.md" \
+            -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-strategy.md
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/templates/Test/%231%20Test%20Specification.md" \
+            -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-specification.md
           wc -c /tmp/test-templates/*.md
 
       - name: Setup opencode
