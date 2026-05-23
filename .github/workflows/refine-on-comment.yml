@@ -170,12 +170,17 @@ jobs:
         id: push
         if: steps.files.outputs.found == 'true'
         env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Defensive: re-embed org PAT in origin URL (persisted credentials
+          # from actions/checkout can be lost between steps on self-hosted runners).
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           while IFS= read -r f; do
             [ -f "$f" ] && git add -- "$f"
           done < target-files.txt
