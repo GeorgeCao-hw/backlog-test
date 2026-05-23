@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           gh pr view "$PR_NUM" --json files \
             -q '.files[] | select(.status != "removed") | .path' > pr-files.txt
-          grep -E '^issue_docs/[^/]+/Test/test-design-(report|cases)\.md$' pr-files.txt > deliv-files.txt || true
+          grep -E '^issue_docs/[^/]+/Test/(test-design-report\.md|test_design_cases\.py)$' pr-files.txt > deliv-files.txt || true
           if [ ! -s deliv-files.txt ]; then
             echo "::notice::No per-issue test deliverables changed; nothing to aggregate."
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -157,7 +157,7 @@ jobs:
               mod_dir = IT_ROOT / "services" / mod
               mod_dir.mkdir(parents=True, exist_ok=True)
               strategy_path = mod_dir / "TestStrategy.md"
-              cases_path = mod_dir / "TestCases.md"
+              cases_path = mod_dir / "test_cases.py"
               strategy_exists = strategy_path.exists() and strategy_path.stat().st_size > 0
               cases_exists = cases_path.exists() and cases_path.stat().st_size > 0
 
@@ -197,7 +197,7 @@ jobs:
               for issue_id in issues:
                   prompt_lines += [
                       f"- 需求测试策略：issue_docs/{issue_id}/Test/test-design-report.md",
-                      f"- 需求测试用例：issue_docs/{issue_id}/Test/test-design-cases.md",
+                      f"- 需求测试用例（Python pytest 脚本）：issue_docs/{issue_id}/Test/test_design_cases.py",
                   ]
               prompt_lines += [
                   "",
@@ -208,10 +208,13 @@ jobs:
                   "   - 把每个单需求测试策略的要点融入对应章节；既有内容不要删除，新条目以追加方式呈现。",
                   f"   - 文件顶部维护一段「更新记录」表格：每次新增一行，列出 PR 号、issue 列表、合入时间。本次：PR [#{PR_NUM}]({PR_URL})，issues={', '.join(issues)}。",
                   "",
-                  f"2. {cases_path}",
-                  "   - 表格列结构与模块全量用例保持一致；模块文件不存在时用 /tmp/test-templates/test-specification.md 字段定义作约束。",
-                  "   - 单需求用例追加到模块全量用例末尾，不要删除既有用例。",
-                  f"   - 用例 ID 与既有冲突时，给新加入条目加 `.pr-{PR_NUM}` 后缀避免覆盖。",
+                  f"2. {cases_path}  ← **必须是可直接 pytest 执行的 Python 脚本（.py），不是 markdown**",
+                  "   - **格式覆盖**：忽略 skill 中关于 markdown 表格 / agent-exec 块的 output 约定；本次只采纳 skill 的方法论。output 形式固定为 Python pytest。",
+                  "   - 沿用模块已有 Python 用例的整体结构（imports、fixtures、辅助函数）；模块文件不存在时按 pytest 惯例新建一个最小骨架（含 `import pytest` 和一个空的 fixtures 区）。",
+                  "   - 把单需求的每条用例追加为新的 `def test_<模块>_<能力>_<序号>(...):` 函数；既有用例（已有的 def test_*）一律保留不动。",
+                  "   - 优先级用 `@pytest.mark.p0/p1/p2` 装饰器；docstring 一行带 `[维度标识]` + 简述。",
+                  f"   - 函数名冲突时，给新加入条目加后缀 `_pr_{PR_NUM}` 避免覆盖。",
+                  "   - 文件末尾维护一段 `# ===== 用例索引（人类可贴禅道/Tapd） =====` 注释块，更新或追加 markdown 表格行（用例 ID = 函数名 / 标题 / 关联 task / 优先级 / 来源 PR）。",
                   "",
                   "只产出这两个文件，不要修改其他文件，不要询问、不要回复多余信息。",
               ]
@@ -265,7 +268,7 @@ jobs:
           git checkout -b "$BRANCH"
           while IFS= read -r mod; do
             [ -z "$mod" ] && continue
-            git add "services/$mod/TestStrategy.md" "services/$mod/TestCases.md" || true
+            git add "services/$mod/TestStrategy.md" "services/$mod/test_cases.py" || true
           done < "$GITHUB_WORKSPACE/touched-modules.txt"
           if git diff --cached --quiet; then
             echo "::notice::No effective changes; skipping PR."
@@ -280,7 +283,7 @@ jobs:
 
           Modules updated: \`${MODS}\`
 
-          Per-issue test deliverables from backlog were merged via opencode into each module's \`TestStrategy.md\` + \`TestCases.md\`. Existing module content was preserved; new entries were appended.
+          Per-issue test deliverables from backlog were merged via opencode into each module's \`TestStrategy.md\` (strategy doc, markdown) + \`test_cases.py\` (pytest script). Existing module content was preserved; new entries were appended.
           EOF
 
           gh pr create \

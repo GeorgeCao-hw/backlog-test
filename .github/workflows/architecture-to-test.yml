@@ -152,7 +152,7 @@ jobs:
               test_dir = pathlib.Path(f"issue_docs/{issue_id}/Test")
               test_dir.mkdir(parents=True, exist_ok=True)
               report = test_dir / "test-design-report.md"
-              cases = test_dir / "test-design-cases.md"
+              cases = test_dir / "test_design_cases.py"
 
               # Resolve skills: general (always) + module-specific (best-effort).
               module = extract_module(arch_path)
@@ -197,13 +197,15 @@ jobs:
                   "- 第 3 节按勾选的维度填写专项验证设计，未勾选的小节直接删除",
                   "- 与架构文档「功能设计分解 TASK 清单」逐条对齐，确保每个 TASK 在测试策略中有对应入口",
                   "",
-                  f"文件 2：{cases}",
-                  "- 以「测试用例规约模板」字段定义为约束",
-                  f"- H1 改为 `# #{issue_id} <需求名称> 测试用例清单`",
-                  "- 用 markdown 表格列出所有用例，列与模板字段一致：用例 ID / 对应 task(issueID) 链接 / 前置条件 / 操作步骤 / 预期结果 / 优先级 / 类型",
-                  "- 用例 ID 采用 `<模块>.<能力>.<序号>` 格式",
-                  "- 至少覆盖架构文档中每条 SR/AR 与每个 TASK，关键 case 优先级 P0",
-                  "- 「操作步骤」要可执行、「预期结果」要可断言",
+                  f"文件 2：{cases}  ← **必须是可直接 pytest 执行的 Python 脚本（.py），不是 markdown**",
+                  "- **格式覆盖**：忽略 skill 中关于 markdown 表格 / agent-exec 块的 output 约定；本次只采纳 skill 的方法论（9 维度覆盖、等价类、边界值、用例命名、可追溯性）。output 形式固定为 Python pytest。",
+                  "- 文件头注释：`# #{issue_id} <需求名称> 测试用例（Python pytest 脚本，由 architecture-to-test workflow 生成）`，下面 1-2 行注释写来源 PR 与架构文档路径。",
+                  "- 必要 import：`import pytest`，按需 `import requests`、`from unittest import mock` 等。",
+                  "- 每个用例一个 `def test_<模块>_<能力>_<序号>(...):` 函数；函数 docstring 写 `[维度标识] 一句话描述`，对应优先级用 `@pytest.mark.p0/p1/p2` 装饰器。",
+                  "- 至少覆盖架构文档中每条 SR/AR 与每个 TASK；可使用 `@pytest.mark.parametrize` 合并相邻等价类。",
+                  "- 操作步骤用真实可执行代码（curl 改 requests / subprocess、UI 改 Playwright 占位）；预期结果用 assert 断言。",
+                  "- 顶部留一个 `pytest.ini` / conftest 风格的 fixtures 区（必要时为空）。",
+                  "- 文件末尾追加一段 `# ===== 用例索引（人类导入禅道/Tapd 可贴）=====` 注释块，把所有 test 函数列成 markdown 表格（用例 ID / 标题 / 关联 task / 优先级），便于人类一眼看完覆盖范围。",
                   "",
                   "完成两个文件的写入后停止；不要询问、不要修改其他文件。",
               ]
