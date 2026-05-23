@@ -66,10 +66,13 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          if gh pr view "$PR_NUM" --json files -q '.files[].path' \
+          # --repo is required because this step runs BEFORE the checkout step,
+          # so gh has no git context to infer the repository from.
+          if gh pr view "$PR_NUM" --repo "$REPO" --json files -q '.files[].path' \
              | grep -qE '^issue_docs/[^/]+/Test/'; then
             echo "has_test=true" >> "$GITHUB_OUTPUT"
           else
