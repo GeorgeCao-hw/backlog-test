@@ -102,7 +102,10 @@ jobs:
       - name: Comment — refine start
         if: needs.gate.outputs.mode == 'refine' && needs.gate.outputs.head_repo == github.repository
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # MUST stay on GITHUB_TOKEN (= github-actions[bot], type=Bot) so the
+          # gate filter excludes this comment from re-triggering the workflow.
+          # Switching to PAT (=human user) caused an infinite loop.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.issue.number }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
@@ -335,7 +338,8 @@ jobs:
       - name: Comment — refine done
         if: needs.gate.outputs.mode == 'refine' && steps.push.outputs.pushed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # MUST stay on GITHUB_TOKEN — see "Comment — refine start" rationale.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.issue.number }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
@@ -351,7 +355,8 @@ jobs:
       - name: Comment — failure
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # MUST stay on GITHUB_TOKEN — see "Comment — refine start" rationale.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.issue.number }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
