@@ -1,4 +1,4 @@
-name: 测试交付件融合
+name: 测试交付件修复
 
 on:
   issue_comment:
@@ -17,6 +17,22 @@ jobs:
     if: github.event.issue.pull_request != null && github.event.comment.user.type != 'Bot'
     runs-on: ubuntu-latest
     steps:
+      - name: Parse comment mode
+        id: mode
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          # First non-empty line, trimmed.
+          first_line=$(printf '%s' "$COMMENT_BODY" | awk 'NF{print; exit}' | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+          if [ "$first_line" = "/accept" ]; then
+            echo "mode=accept" >> "$GITHUB_OUTPUT"
+            echo "::notice::comment mode=accept"
+          else
+            echo "mode=refine" >> "$GITHUB_OUTPUT"
+            echo "::notice::comment mode=refine"
+          fi
+
       - name: Fetch PR metadata
         id: pr
         env:
@@ -38,8 +54,36 @@ jobs:
             echo "::warning::PR #${PR_NUM} head is from fork ($HEAD_REPO); cannot push back. Skipping."
           fi
 
+      # /accept on a draft PR → convert to ready-for-review, then stop.
+      - name: Mark draft PR ready for review
+        if: steps.mode.outputs.mode == 'accept' && steps.pr.outputs.is_draft == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          gh pr ready "$PR_NUM" --repo "$REPO"
+          gh api -X POST -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content="+1" >/dev/null
+          echo "::notice::PR #${PR_NUM} marked ready for review (triggered by /accept)"
+
+      - name: React to /accept on non-draft PR
+        if: steps.mode.outputs.mode == 'accept' && steps.pr.outputs.is_draft != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api -X POST -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=confused >/dev/null
+          echo "::notice::PR is not a draft; /accept ignored."
+
       - name: React with 'eyes'
-        if: steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        if: steps.mode.outputs.mode == 'refine' && steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -51,7 +95,7 @@ jobs:
             -f content=eyes >/dev/null
 
       - name: Checkout PR head branch
-        if: steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        if: steps.mode.outputs.mode == 'refine' && steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.pr.outputs.head_ref }}
@@ -60,7 +104,7 @@ jobs:
 
       - name: Locate test design files in PR
         id: files
-        if: steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        if: steps.mode.outputs.mode == 'refine' && steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ github.event.issue.number }}
@@ -132,7 +176,7 @@ jobs:
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
       - name: Final reaction
-        if: always() && steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
+        if: always() && steps.mode.outputs.mode == 'refine' && steps.pr.outputs.is_draft == 'true' && steps.pr.outputs.head_repo == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
