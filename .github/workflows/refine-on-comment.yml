@@ -1,4 +1,4 @@
-name: Refine Test Docs On Draft PR Comment
+name: 测试交付件融合
 
 on:
   issue_comment:
