@@ -346,3 +346,4 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh issue comment "$PR_NUM" --repo "$REPO" --body "❌ \`模块测试集成\` 执行异常，详见 [run 日志](${RUN_URL})。修复后可在 Actions 页面 re-run 重试。" || true
+
