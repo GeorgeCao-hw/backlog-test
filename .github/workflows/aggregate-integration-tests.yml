@@ -3,6 +3,8 @@ name: 模块测试集成
 on:
   pull_request:
     types: [closed]
+    paths:
+      - 'issue_docs/*/Test/**'
 
 permissions:
   contents: write

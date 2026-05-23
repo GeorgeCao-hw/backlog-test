@@ -3,6 +3,9 @@ name: 测试设计与测试用例
 on:
   pull_request:
     types: [closed]
+    paths:
+      - 'issue_docs/*/Architecture Design/**'
+      - 'issue_docs/*/Architecture Desgin/**'
 
 permissions:
   contents: write
