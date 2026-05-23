@@ -118,7 +118,7 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/it
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/agentic-develop-playground/integration-tests.git" /tmp/it
-          ls /tmp/it/service/ || true
+          ls /tmp/it/services/ || true
 
       - name: Merge per-issue deliverables into module files via opencode
         if: steps.modules.outputs.found == 'true'
@@ -151,7 +151,7 @@ jobs:
 
           touched_modules = []
           for mod, issues in mod_to_issues.items():
-              mod_dir = IT_ROOT / "service" / mod
+              mod_dir = IT_ROOT / "services" / mod
               mod_dir.mkdir(parents=True, exist_ok=True)
               strategy_path = mod_dir / "TestStrategy.md"
               cases_path = mod_dir / "TestCases.md"
@@ -161,7 +161,7 @@ jobs:
               prompt_lines = [
                   "你是测试集成 agent。本次任务必须一次性跑完，全流程无需任何人工确认。",
                   "",
-                  f"【目标模块】service/{mod}/",
+                  f"【目标模块】services/{mod}/",
                   "",
                   "【模块已有交付件】（请使用 Read 读取后再决定融合方式）",
                   f"- 模块测试策略：{strategy_path}  ({'已存在，融合' if strategy_exists else '不存在，使用模板新建'})",
@@ -244,7 +244,7 @@ jobs:
           git checkout -b "$BRANCH"
           while IFS= read -r mod; do
             [ -z "$mod" ] && continue
-            git add "service/$mod/TestStrategy.md" "service/$mod/TestCases.md" || true
+            git add "services/$mod/TestStrategy.md" "services/$mod/TestCases.md" || true
           done < "$GITHUB_WORKSPACE/touched-modules.txt"
           if git diff --cached --quiet; then
             echo "::notice::No effective changes; skipping PR."
