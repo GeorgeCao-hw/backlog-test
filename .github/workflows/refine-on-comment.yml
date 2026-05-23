@@ -14,7 +14,13 @@ concurrency:
 
 jobs:
   refine:
-    if: github.event.issue.pull_request != null && github.event.comment.user.type != 'Bot'
+    # Skip comments from any kind of bot:
+    #   - GitHub-typed bots via user.type == 'Bot' (github-actions[bot], dependabot[bot] ...)
+    #   - Org bots registered as User but with -bot suffix (opensourceways-bot ...)
+    if: >-
+      github.event.issue.pull_request != null
+      && github.event.comment.user.type != 'Bot'
+      && !endsWith(github.event.comment.user.login, '-bot')
     runs-on: ubuntu-latest
     steps:
       - name: Parse comment mode
