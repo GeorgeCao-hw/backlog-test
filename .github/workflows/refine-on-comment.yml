@@ -87,6 +87,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           gh pr ready "$PR_NUM" --repo "$REPO"
@@ -94,6 +95,23 @@ jobs:
             "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content="+1" >/dev/null
           echo "::notice::PR #${PR_NUM} marked ready for review (triggered by /accept)"
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "✅ \`/accept\` 已生效 — 草稿 PR 已转为正式 PR，进入合入门禁流程。
+
+          run 日志：${RUN_URL}" || true
+
+      - name: Comment — refine start
+        if: needs.gate.outputs.mode == 'refine' && needs.gate.outputs.head_repo == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "👀 \`测试交付件修复\` 已触发 — 正在根据评论修订测试设计/用例。
+
+          - 触发评论：${COMMENT_URL}
+          - run 日志：${RUN_URL}" || true
 
       - name: React with 'eyes'
         if: needs.gate.outputs.mode == 'refine' && needs.gate.outputs.head_repo == github.repository
@@ -210,3 +228,29 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content="$REACT" >/dev/null
+
+      - name: Comment — refine done
+        if: needs.gate.outputs.mode == 'refine' && steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "🚀 \`测试交付件修复\` 已完成 — 根据评论的修订已追加为新 commit，请再次 review。
+
+          - 触发评论：${COMMENT_URL}
+          - run 日志：${RUN_URL}
+
+          继续评论可多轮迭代；评论 \`/accept\` 转为正式 PR。" || true
+
+      - name: Comment — failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "❌ \`测试交付件修复\` 执行异常，详见 [run 日志](${RUN_URL})。请检查后重新评论触发，或在 Actions 页面 re-run。" || true

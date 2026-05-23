@@ -79,6 +79,23 @@ jobs:
           fi
           echo "found=true" >> "$GITHUB_OUTPUT"
 
+      - name: Comment — start
+        if: steps.modules.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MAP=$(awk '{print "- #" $1 " → `" $2 "`"}' issue-module-map.txt)
+          BODY="🟦 \`模块测试集成\` 已触发 — 正在将测试用例合并到 integration-tests 仓的对应模块。
+
+          需求 → 模块映射：
+          ${MAP}
+
+          预计 2-4 分钟完成；进度见 [run 日志](${RUN_URL})。"
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "$BODY" || true
+
       - name: Fetch Test templates from spec repo
         if: steps.modules.outputs.found == 'true'
         env:
@@ -253,6 +270,7 @@ jobs:
           PY
 
       - name: Open draft PR to integration-tests
+        id: draft
         if: steps.modules.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -286,10 +304,43 @@ jobs:
           Per-issue test deliverables from backlog were merged via opencode into each module's \`TestStrategy.md\` (strategy doc, markdown) + \`test_cases.py\` (pytest script). Existing module content was preserved; new entries were appended.
           EOF
 
-          gh pr create \
+          DRAFT_URL=$(gh pr create \
             --draft \
             --base main \
             --head "$BRANCH" \
             --title "docs(test): integrate from backlog #${PR_NUM} (${MODS})" \
             --body-file /tmp/pr-body.md \
-            --repo agentic-develop-playground/integration-tests
+            --repo agentic-develop-playground/integration-tests)
+          echo "draft_pr_url=$DRAFT_URL" >> "$GITHUB_OUTPUT"
+          echo "modules=$MODS" >> "$GITHUB_OUTPUT"
+          echo "::notice::draft PR opened: $DRAFT_URL"
+
+      - name: Comment — done
+        if: steps.draft.outputs.draft_pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          DRAFT_URL: ${{ steps.draft.outputs.draft_pr_url }}
+          MODS: ${{ steps.draft.outputs.modules }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "✅ \`模块测试集成\` 已完成。
+
+          已将本 PR 的测试交付件合并到 \`integration-tests\` 仓的模块：\`${MODS}\`
+
+          - 跨仓草稿 PR：${DRAFT_URL}
+          - 内容：\`services/<module>/TestStrategy.md\` + \`services/<module>/test_cases.py\`
+          - 既有模块内容已保留；新条目追加在末尾
+
+          run 日志：${RUN_URL}" || true
+
+      - name: Comment — failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "❌ \`模块测试集成\` 执行异常，详见 [run 日志](${RUN_URL})。修复后可在 Actions 页面 re-run 重试。" || true
