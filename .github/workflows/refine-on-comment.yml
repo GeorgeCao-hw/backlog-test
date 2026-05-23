@@ -77,7 +77,7 @@ jobs:
   act:
     needs: gate
     if: needs.gate.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ai-dev-runner]
     steps:
       # /accept on a draft PR → convert to ready-for-review, then stop.
       - name: Mark draft PR ready for review
@@ -152,37 +152,140 @@ jobs:
           echo "Target files:"
           cat target-files.txt
 
-      - name: Refine docs with AI agent (stub)
+      - name: Setup opencode
         if: steps.files.outputs.found == 'true'
         env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_USER: ${{ github.event.comment.user.login }}
-          COMMENT_URL: ${{ github.event.comment.html_url }}
-          COMMENT_AT: ${{ github.event.comment.created_at }}
+          HOME: /home/runner
+          OPENCODE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
         run: |
           set -euo pipefail
-          python3 - <<'PY' > /tmp/refine-note.md
-          import os
-          body = os.environ.get("COMMENT_BODY", "")
-          quoted = "\n".join("> " + ln for ln in body.splitlines()) or "> (empty)"
-          print(f"""
-          ---
+          if ! command -v opencode >/dev/null 2>&1; then
+            npm install -g opencode-ai || curl -fsSL https://opencode.ai/install | bash
+          fi
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.opencode/bin:$PATH"
+          command -v opencode || { echo "::error::opencode install failed"; exit 1; }
+          opencode --version || true
+          mkdir -p "$HOME/.local/share/opencode" "$HOME/.config/opencode"
+          printf '{"alibaba-cn":{"type":"api","key":"%s"}}\n' "$OPENCODE_API_KEY" > "$HOME/.local/share/opencode/auth.json"
+          chmod 600 "$HOME/.local/share/opencode/auth.json"
+          printf '{"$schema":"https://opencode.ai/config.json"}\n' > "$HOME/.config/opencode/opencode.json"
 
-          ### 自动修订（占位 stub）
+      - name: Clone integration-tests for test-case-generator skills
+        if: steps.files.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/it
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/agentic-develop-playground/integration-tests.git" /tmp/it
+          ls /tmp/it/test_skills_base/test-case-generator/ 2>/dev/null || echo "::warning::general skill missing"
 
-          > 由 GitHub Action 自动写入，待 AI Agent 接入后替换为实际修订内容。
-          > 评论：[{os.environ['COMMENT_URL']}]({os.environ['COMMENT_URL']}) by **@{os.environ['COMMENT_USER']}** at {os.environ['COMMENT_AT']}
+      - name: Refine docs via opencode (in-place substantive edits)
+        if: steps.files.outputs.found == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_MODEL: alibaba-cn/glm-5
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing from PATH after Setup"; exit 1; }
+          # Stash the comment body to a file so opencode can Read it without prompt escaping issues.
+          mkdir -p /tmp/refine
+          printf '%s' "$COMMENT_BODY" > /tmp/refine/comment.txt
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess, sys
 
-          原始评论：
+          IT_ROOT = pathlib.Path("/tmp/it")
+          GENERAL_SKILL_DIR = IT_ROOT / "test_skills_base" / "test-case-generator"
+          MODULE_PATTERN = re.compile(
+              r"^##\s*模块归属\s*$.*?^[\s\-]*\*{0,2}module\*{0,2}\s*:\s*([^\s`\"]+)",
+              re.MULTILINE | re.DOTALL,
+          )
 
-          {quoted}
-          """)
+          def extract_module(report_path):
+              try:
+                  return MODULE_PATTERN.search(pathlib.Path(report_path).read_text(encoding="utf-8")).group(1).strip()
+              except Exception:
+                  return None
+
+          # Group target files by issue id (path: issue_docs/<id>/Test/<file>)
+          by_issue = {}
+          for line in pathlib.Path("target-files.txt").read_text().splitlines():
+              p = line.strip()
+              if not p:
+                  continue
+              parts = p.split("/")
+              if len(parts) < 4:
+                  continue
+              by_issue.setdefault(parts[1], []).append(p)
+
+          for issue_id, files in by_issue.items():
+              report = next((f for f in files if f.endswith("test-design-report.md")), None)
+              cases = next((f for f in files if f.endswith("test_design_cases.py")), None)
+              module = extract_module(report) if report else None
+
+              skill_lines = []
+              if GENERAL_SKILL_DIR.is_dir():
+                  skill_lines.append(f"- 通用测试用例生成技能（参考）：{GENERAL_SKILL_DIR}/SKILL.md + references/")
+              if module:
+                  m = IT_ROOT / "services" / module / "test-case-generator"
+                  if m.is_dir():
+                      skill_lines.append(f"- 模块特性测试技能（参考）：{m}/SKILL.md + references/")
+
+              prompt_lines = [
+                  "你是测试设计修订 agent。本次任务必须一次性跑完，全流程无需任何人工确认。",
+                  "",
+                  "【任务】根据测试专家的评审评论，对单需求的测试设计 / 用例做**实质性**修订，直接 in-place 修改下面的文件。",
+                  "",
+                  "【输入】（请用 Read 工具读取后再开始）",
+                  "1. 评审评论原文：/tmp/refine/comment.txt",
+              ]
+              i = 2
+              if report:
+                  prompt_lines.append(f"{i}. 当前测试设计说明书：{report}")
+                  i += 1
+              if cases:
+                  prompt_lines.append(f"{i}. 当前测试用例（pytest）：{cases}")
+              if skill_lines:
+                  prompt_lines += ["", "【技能参考（仅参考方法论，不要改变 output 形态）】"] + skill_lines
+              prompt_lines += [
+                  "",
+                  "【修改原则】",
+                  "1. 必须读懂评论的真实诉求（增删用例 / 补边界值 / 改优先级 / 调覆盖矩阵 / 修字段定义 等），落到文件的合适位置。",
+                  "2. 只动评论所要求的部分；不相关的内容一律不动。",
+                  "3. **严格禁止**任何 meta / 过程性 / 日志类内容，包括但不限于：",
+                  "   - 不要新增 `### 自动修订`、`修订记录`、`变更说明`、`Changelog` 等章节或标题",
+                  "   - 不要写「由 GitHub Action 自动写入…」「评论来源…」「by @xxx at …」之类元数据块",
+                  "   - 不要在文件末尾追加「原始评论」「触发评论」之类引用块",
+                  "   - 不要把评论原文复制粘贴进文件",
+                  "4. 测试设计说明书：维持原章节结构，在合适章节内调整正文（如新增覆盖矩阵行、调整测试维度勾选）。",
+                  "5. 测试用例 Python：按评论增删 / 修改 `def test_*` 函数；新增函数命名延续既有约定；fixtures 保留；末尾「用例索引」表同步更新。",
+                  "6. 修改完成后直接结束，不要再向对话输出"我已经做了…"之类的说明。",
+                  "",
+                  "完成后停止；不要询问、不要修改其他文件。",
+              ]
+              prompt = "\n".join(prompt_lines)
+
+              print(f"::group::opencode refine prompt for #{issue_id}")
+              print(prompt)
+              print("::endgroup::", flush=True)
+
+              cmd = [
+                  "opencode", "run",
+                  "--model", os.environ.get("OPENCODE_MODEL", "alibaba-cn/glm-5"),
+                  "--agent", "build",
+                  "--dangerously-skip-permissions",
+                  "--thinking=false",
+                  prompt,
+              ]
+              r = subprocess.run(cmd, text=True)
+              if r.returncode != 0:
+                  print(f"::error::opencode exited {r.returncode} for #{issue_id}", file=sys.stderr)
+                  sys.exit(r.returncode)
+
+              print(f"::notice::refined #{issue_id}")
           PY
-          while IFS= read -r f; do
-            [ -f "$f" ] || continue
-            cat /tmp/refine-note.md >> "$f"
-            echo "appended revision note to $f"
-          done < target-files.txt
 
       - name: Commit and push to PR branch
         id: push
