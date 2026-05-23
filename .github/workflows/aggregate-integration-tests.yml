@@ -283,7 +283,8 @@ jobs:
           BRANCH="bot/aggregate-from-backlog-pr-${PR_NUM}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          # -B: reset local branch if a stale copy was left by a prior failed run
+          git checkout -B "$BRANCH"
           while IFS= read -r mod; do
             [ -z "$mod" ] && continue
             git add "services/$mod/TestStrategy.md" "services/$mod/test_cases.py" || true
@@ -294,7 +295,8 @@ jobs:
           fi
           MODS=$(paste -sd, "$GITHUB_WORKSPACE/touched-modules.txt")
           git commit -m "docs(test): integrate test deliverables from backlog PR #${PR_NUM} (modules: ${MODS})"
-          git push -u origin "$BRANCH"
+          # --force: bot branch is wholly workflow-owned; re-runs must overwrite stale tips.
+          git push -u --force origin "$BRANCH"
 
           cat > /tmp/pr-body.md <<EOF
           Auto-generated draft from merged backlog PR [#${PR_NUM}](${PR_URL}) — ${PR_TITLE}.

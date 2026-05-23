@@ -284,14 +284,17 @@ jobs:
           # between steps on self-hosted runners. Re-embed the org PAT in
           # the origin URL so push always has auth.
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          git checkout -b "$BRANCH"
+          # -B: reset local branch if a stale copy was left by a prior failed run
+          git checkout -B "$BRANCH"
           while IFS= read -r p; do git add -- "$p"; done < generated-files.txt
           if git diff --cached --quiet; then
             echo "Nothing to commit."
             exit 0
           fi
           git commit -m "docs(test): generate stub test design docs from PR #${PR_NUM}"
-          git push -u origin "$BRANCH"
+          # --force: this bot branch is wholly workflow-owned and re-runs (or
+          # earlier-failed runs that left stale tips) must overwrite cleanly.
+          git push -u --force origin "$BRANCH"
 
           cat > pr-body.md <<EOF
           Auto-generated draft from merged PR [#${PR_NUM}](${PR_URL}) — ${PR_TITLE}.
