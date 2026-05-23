@@ -251,7 +251,8 @@ jobs:
       - name: Open draft PR with generated test docs
         if: steps.gen.outputs.count != '' && steps.gen.outputs.count != '0'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -261,6 +262,10 @@ jobs:
           BRANCH="bot/test-docs-from-pr-${PR_NUM}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Defensive: actions/checkout's persisted credentials can be lost
+          # between steps on self-hosted runners. Re-embed the org PAT in
+          # the origin URL so push always has auth.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           git checkout -b "$BRANCH"
           while IFS= read -r p; do git add -- "$p"; done < generated-files.txt
           if git diff --cached --quiet; then
