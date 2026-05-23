@@ -140,6 +140,7 @@ jobs:
           PR_URL = os.environ["PR_URL"]
           PR_TITLE = os.environ["PR_TITLE"]
           IT_ROOT = pathlib.Path("/tmp/it")
+          GENERAL_SKILL_DIR = IT_ROOT / "test_skills_base" / "test-case-generator"
 
           mod_to_issues = {}
           for line in pathlib.Path("issue-module-map.txt").read_text().splitlines():
@@ -160,6 +161,18 @@ jobs:
               strategy_exists = strategy_path.exists() and strategy_path.stat().st_size > 0
               cases_exists = cases_path.exists() and cases_path.stat().st_size > 0
 
+              skill_lines = []
+              if GENERAL_SKILL_DIR.is_dir():
+                  skill_lines.append(f"- 通用测试用例生成技能（必读）：{GENERAL_SKILL_DIR}/  — 读 SKILL.md 与 references/ 内的指导，按其方法合并 / 产出用例")
+              else:
+                  print(f"::warning::general skill dir {GENERAL_SKILL_DIR} missing; proceeding without it")
+
+              mod_skill_dir = IT_ROOT / "services" / mod / "test-case-generator"
+              if mod_skill_dir.is_dir():
+                  skill_lines.append(f"- 模块特性测试技能（必读）：{mod_skill_dir}/  — 读 SKILL.md 与 references/ 内容，覆盖 {mod} 模块的特定用例约定")
+              else:
+                  print(f"::notice::no per-module skill at {mod_skill_dir}; using general skill only")
+
               prompt_lines = [
                   "你是测试集成 agent。本次任务必须一次性跑完，全流程无需任何人工确认。",
                   "",
@@ -173,6 +186,12 @@ jobs:
                   "- 测试策略模板：/tmp/test-templates/test-strategy.md",
                   "- 测试用例规约模板：/tmp/test-templates/test-specification.md",
                   "",
+              ]
+              if skill_lines:
+                  prompt_lines += [
+                      "【测试用例生成 skills】（必须 Read 这些 SKILL.md / references 内的指导文件，并按其约定来合并 / 产出用例）",
+                  ] + skill_lines + [""]
+              prompt_lines += [
                   f"【本次合入的单需求交付件】（涉及 issue：{', '.join(issues)}）",
               ]
               for issue_id in issues:
