@@ -124,9 +124,9 @@ jobs:
         run: |
           set -euo pipefail
           gh pr view "$PR_NUM" --json files -q '.files[].path' > pr-files.txt
-          grep -E '^issue_docs/[^/]+/Test/test-design-(report|cases)\.md$' pr-files.txt > target-files.txt || true
+          grep -E '^issue_docs/[^/]+/Test/(test-design-report\.md|test_design_cases\.py)$' pr-files.txt > target-files.txt || true
           if [ ! -s target-files.txt ]; then
-            echo "::notice::No test-design-report.md or test-design-cases.md in this PR; nothing to refine."
+            echo "::notice::No test-design-report.md or test_design_cases.py in this PR; nothing to refine."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
