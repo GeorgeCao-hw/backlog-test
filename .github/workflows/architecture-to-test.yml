@@ -41,6 +41,23 @@ jobs:
           echo "::notice::Architecture files detected:"
           cat arch-files.txt
 
+      - name: Comment — start
+        if: steps.arch.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ARCH_LIST=$(awk '{print "- `" $0 "`"}' arch-files.txt)
+          BODY="🟦 \`测试设计与测试用例\` 已触发 — 正在为本 PR 的架构设计生成测试设计说明书与测试用例。
+
+          检测到的架构文档：
+          ${ARCH_LIST}
+
+          预计 3-5 分钟完成；进度见 [run 日志](${RUN_URL})。"
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "$BODY" || true
+
       - name: Check 功能设计分解 TASK 清单 section
         if: steps.arch.outputs.found == 'true'
         run: |
@@ -249,6 +266,7 @@ jobs:
           echo "count=$(wc -l < generated-files.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Open draft PR with generated test docs
+        id: draft
         if: steps.gen.outputs.count != '' && steps.gen.outputs.count != '0'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -287,9 +305,45 @@ jobs:
           Stub content — replace with AI Agent output once wired up.
           EOF
 
-          gh pr create \
+          DRAFT_URL=$(gh pr create \
             --draft \
             --base "$BASE_REF" \
             --head "$BRANCH" \
             --title "docs(test): test design from #${PR_NUM}" \
-            --body-file pr-body.md
+            --body-file pr-body.md)
+          echo "draft_pr_url=$DRAFT_URL" >> "$GITHUB_OUTPUT"
+          echo "::notice::draft PR opened: $DRAFT_URL"
+
+      - name: Comment — done
+        if: steps.gen.outputs.count != '' && steps.gen.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          DRAFT_URL: ${{ steps.draft.outputs.draft_pr_url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          BODY="✅ \`测试设计与测试用例\` 已完成。
+
+          自动生成的测试设计草稿 PR：${DRAFT_URL}
+
+          内容：
+          - 测试策略说明书：\`test-design-report.md\` (markdown)
+          - 测试用例：\`test_design_cases.py\` (pytest)
+
+          测试专家可在草稿 PR 上评论：
+          - \`/accept\` — 转为正式 PR 进入合入流程
+          - 任意修改意见 — 触发 \`测试交付件修复\` 自动追加修订
+
+          run 日志：${RUN_URL}"
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "$BODY" || true
+
+      - name: Comment — failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PR_NUM" --repo "$REPO" --body "❌ \`测试设计与测试用例\` 执行异常，详见 [run 日志](${RUN_URL})。修复后可在 Actions 页面 re-run 重试。" || true
