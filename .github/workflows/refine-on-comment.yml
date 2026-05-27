@@ -1,31 +1,43 @@
 name: 测试交付件评审
 
-# TSE 自动评审：当测试设计草稿 PR（含 issue_docs/*/Test/ 交付件）出现或更新时，
-# 由测试 TSE agent 评审测试策略说明书 + 测试用例脚本：
-#   - 通过 → gh pr ready + gh pr merge（自动转正式并合入）
-#   - 不通过 → 在草稿 PR 回评问题清单，留人工处理（人工推修订后 synchronize 自动重审）
+# 单需求测试草稿 PR（issue_docs/<id>/Test/）的 TSE 评审 + 自动修订。
 #
-# 触发用 pull_request（不是 issue_comment）——天然无评论回环问题。
+# 两类触发：
+#   A. pull_request（草稿 PR opened/synchronize/reopened）→ TSE 评审：
+#        - PASS → gh pr ready + merge
+#        - FAIL → 回评问题清单；并（在未达自动修订上限时）调 Test-Design-Agent 按裁决就地修订
+#   B. issue_comment（人工在草稿 PR 上评论）→ 调 Test-Design-Agent 按评论就地修订
+#
+# ⚠️ 防死循环（务必保持）：
+#   - 所有自动修订 commit 的 message 都带标记 `[auto-revise]`，作者为 github-actions[bot]。
+#   - A 路径的 FAIL→修订 仅当 PR head commit message **不含** `[auto-revise]` 才执行。
+#     于是「修订→synchronize→评审→FAIL→(head 是 auto-revise，不再修订)→只评论」闭环终止，
+#     每个外部（人工/生成）改动最多触发 1 轮自动修订。
+#   - B 路径只接受 **非 bot** 评论（user.type != Bot 且 login 不以 -bot 结尾），
+#     bot 自己发的 FAIL 评论 / 修订提示 / opensourceways-bot 评论都不会触发修订。
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - 'issue_docs/*/Test/**'
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
   pull-requests: write
 
 concurrency:
-  group: review-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: review-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
 
 jobs:
+  # ===================== A. TSE 评审（pull_request） =====================
   review:
-    # 只评审本仓的草稿 PR（fork PR 无法安全 checkout/merge）。
     if: >-
-      github.event.pull_request.draft == true
+      github.event_name == 'pull_request'
+      && github.event.pull_request.draft == true
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, ai-dev-runner]
     steps:
@@ -36,7 +48,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Locate test deliverables in PR
+      - name: Locate test deliverables + revise eligibility
         id: files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,25 +59,34 @@ jobs:
           gh pr view "$PR_NUM" --repo "$REPO" --json files -q '.files[].path' > pr-files.txt
           grep -E '^issue_docs/[^/]+/Test/(test-design-report\.md|test_design_cases\.py)$' pr-files.txt > target-files.txt || true
           if [ ! -s target-files.txt ]; then
-            echo "::notice::No test deliverables (test-design-report.md / test_design_cases.py) in PR; skipping review."
+            echo "::notice::No test deliverables in PR; skipping review."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "found=true" >> "$GITHUB_OUTPUT"
-          echo "Review targets:"
+          # 防循环：head commit 已是自动修订则本轮不再自动修订（只评审 + 评论）。
+          HEAD_MSG=$(git log -1 --format=%s || echo "")
+          if printf '%s' "$HEAD_MSG" | grep -q '\[auto-revise\]'; then
+            echo "can_revise=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::head commit is an auto-revise; FAIL will comment only (no further auto-revise)."
+          else
+            echo "can_revise=true" >> "$GITHUB_OUTPUT"
+          fi
           cat target-files.txt
 
-      - name: Fetch TSE review agent spec
+      - name: Fetch agent specs (TSE reviewer + test-design)
         if: steps.files.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           SPEC_REPO: agentic-develop-playground/agent-development-specification
         run: |
           set -euo pipefail
-          mkdir -p ${RUNNER_TEMP}/review
+          mkdir -p ${RUNNER_TEMP}/agents
           gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Review-Agent.md" \
-            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/review/agent.md
-          wc -c ${RUNNER_TEMP}/review/agent.md
+            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/agents/review.md
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Design-Agent.md" \
+            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/agents/design.md
+          wc -c ${RUNNER_TEMP}/agents/*.md
 
       - name: Setup opencode
         if: steps.files.outputs.found == 'true'
@@ -80,7 +101,6 @@ jobs:
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.opencode/bin:$PATH"
           command -v opencode || { echo "::error::opencode install failed"; exit 1; }
-          opencode --version || true
           mkdir -p "$HOME/.local/share/opencode" "$HOME/.config/opencode"
           printf '{"alibaba-cn":{"type":"api","key":"%s"}}\n' "$OPENCODE_API_KEY" > "$HOME/.local/share/opencode/auth.json"
           chmod 600 "$HOME/.local/share/opencode/auth.json"
@@ -94,68 +114,36 @@ jobs:
           OPENCODE_MODEL: alibaba-cn/glm-5
         run: |
           set -euo pipefail
-          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing from PATH after Setup"; exit 1; }
+          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing"; exit 1; }
           rm -f .review-verdict.md
           python3 - <<'PY'
           import os, pathlib, subprocess, sys
-
           RT = os.environ["RUNNER_TEMP"]
-          role = pathlib.Path(f"{RT}/review/agent.md").read_text(encoding="utf-8")
-
+          role = pathlib.Path(f"{RT}/agents/review.md").read_text(encoding="utf-8")
           targets = [l.strip() for l in pathlib.Path("target-files.txt").read_text().splitlines() if l.strip()]
-          reports = [t for t in targets if t.endswith("test-design-report.md")]
-          cases = [t for t in targets if t.endswith("test_design_cases.py")]
-
-          review_inputs = []
-          n = 1
-          for r in reports:
-              review_inputs.append(f"{n}. 测试策略说明书：{r}")
-              n += 1
-          for c in cases:
-              review_inputs.append(f"{n}. 测试用例脚本（pytest）：{c}")
-              n += 1
-
-          arch_hint = []
-          for r in reports:
-              issue_id = r.split("/")[1]
-              if pathlib.Path(f"issue_docs/{issue_id}/Architecture Design").is_dir():
-                  arch_hint.append(f"- 可选核对覆盖：issue_docs/{issue_id}/Architecture Design/ 下的架构设计文档")
-
+          inputs, n = [], 1
+          for t in targets:
+              kind = "测试策略说明书" if t.endswith("test-design-report.md") else "测试用例脚本（pytest）"
+              inputs.append(f"{n}. {kind}：{t}"); n += 1
           prompt = role + "\n\n" + "\n".join([
               "================ 本次任务 ================",
               "",
               "【评审对象】（用 Read 读取）",
-              *review_inputs,
-              *(["", *arch_hint] if arch_hint else []),
+              *inputs,
               "",
               "【裁决输出】",
-              "- 把评审裁决写入仓库根的 `.review-verdict.md`；第一行必须严格是 `VERDICT: PASS` 或 `VERDICT: FAIL`。",
+              "- 写入仓库根 `.review-verdict.md`；第一行必须严格是 `VERDICT: PASS` 或 `VERDICT: FAIL`。",
               "- FAIL 时第一行之后逐条列出问题（文件+位置 | 问题 | 期望/建议）。",
-              "- 只写 `.review-verdict.md` 这一个文件，绝不修改被评审的文件。",
+              "- 只写 `.review-verdict.md`，绝不修改被评审的文件。",
           ])
-
-          print("::group::opencode TSE review prompt")
-          print(prompt)
-          print("::endgroup::", flush=True)
-
-          r = subprocess.run(
-              ["opencode", "run",
-               "--model", os.environ.get("OPENCODE_MODEL", "alibaba-cn/glm-5"),
-               "--agent", "build",
-               "--dangerously-skip-permissions",
-               "--thinking=false",
-               prompt],
-              text=True,
-          )
+          print("::group::opencode TSE review prompt"); print(prompt); print("::endgroup::", flush=True)
+          r = subprocess.run(["opencode","run","--model",os.environ.get("OPENCODE_MODEL","alibaba-cn/glm-5"),
+                              "--agent","build","--dangerously-skip-permissions","--thinking=false", prompt], text=True)
           if r.returncode != 0:
-              print(f"::error::opencode exited {r.returncode}", file=sys.stderr)
-              sys.exit(r.returncode)
+              print(f"::error::opencode exited {r.returncode}", file=sys.stderr); sys.exit(r.returncode)
           PY
-          if [ ! -f .review-verdict.md ]; then
-            echo "::error::TSE agent did not produce .review-verdict.md"
-            exit 1
-          fi
-          echo "::group::verdict file"; cat .review-verdict.md; echo "::endgroup::"
+          if [ ! -f .review-verdict.md ]; then echo "::error::no .review-verdict.md"; exit 1; fi
+          echo "::group::verdict"; cat .review-verdict.md; echo "::endgroup::"
           VERDICT=$(head -1 .review-verdict.md | grep -oE 'PASS|FAIL' | head -1 || true)
           [ -z "$VERDICT" ] && VERDICT=FAIL
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
@@ -170,36 +158,222 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR_NUM" --repo "$REPO" --body "✅ \`测试交付件评审\`（TSE）通过 — 自动将草稿 PR 转为正式并合入。
-
-          run 日志：${RUN_URL}" || true
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "✅ \`测试交付件评审\`（TSE）通过 — 自动转正式并合入。run：${RUN_URL}" || true
           gh pr ready "$PR_NUM" --repo "$REPO"
           gh pr merge "$PR_NUM" --repo "$REPO" --merge --admin --delete-branch
 
-      - name: FAIL → comment issues, leave draft for human
+      - name: FAIL → comment issues
         if: steps.files.outputs.found == 'true' && steps.review.outputs.verdict != 'PASS'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
+          CAN_REVISE: ${{ steps.files.outputs.can_revise }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          if [ "$CAN_REVISE" = "true" ]; then
+            TAIL="下面将自动调用 Test-Design-Agent 按以上意见修订一轮；若修订后仍未通过，则留人工处理。"
+          else
+            TAIL="本轮不再自动修订（上一提交已是自动修订）。请人工修订后推送，会自动重审。"
+          fi
           {
-            echo "❌ \`测试交付件评审\`（TSE）未通过 — 请按以下问题修订后推送（推送会自动重审）："
+            echo "❌ \`测试交付件评审\`（TSE）未通过："
             echo
             cat .review-verdict.md
             echo
-            echo "run 日志：${RUN_URL}"
-          } > "${RUNNER_TEMP}/review-comment.md"
-          gh pr comment "$PR_NUM" --repo "$REPO" --body-file "${RUNNER_TEMP}/review-comment.md" || true
+            echo "$TAIL"
+            echo
+            echo "run：${RUN_URL}"
+          } > "${RUNNER_TEMP}/fail-comment.md"
+          gh pr comment "$PR_NUM" --repo "$REPO" --body-file "${RUNNER_TEMP}/fail-comment.md" || true
+
+      - name: FAIL → auto-revise via Test-Design-Agent (bounded, once per external change)
+        if: steps.files.outputs.found == 'true' && steps.review.outputs.verdict != 'PASS' && steps.files.outputs.can_revise == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_MODEL: alibaba-cn/glm-5
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, subprocess, sys
+          RT = os.environ["RUNNER_TEMP"]
+          role = pathlib.Path(f"{RT}/agents/design.md").read_text(encoding="utf-8")
+          targets = [l.strip() for l in pathlib.Path("target-files.txt").read_text().splitlines() if l.strip()]
+          report = next((t for t in targets if t.endswith("test-design-report.md")), None)
+          cases = next((t for t in targets if t.endswith("test_design_cases.py")), None)
+          lines = ["================ 本次任务（修订模式）================","","【反馈来源】TSE 评审裁决，反馈正文见：.review-verdict.md","","【待修订的既有交付件】（Read 后就地改）"]
+          if report: lines.append(f"- 测试策略说明书：{report}")
+          if cases: lines.append(f"- 测试用例脚本：{cases}")
+          lines += ["","按「修订模式」规则就地修改这两个文件；只改反馈涉及的部分；不要写任何 meta / 过程性内容。"]
+          prompt = role + "\n\n" + "\n".join(lines)
+          print("::group::opencode revise prompt"); print(prompt); print("::endgroup::", flush=True)
+          r = subprocess.run(["opencode","run","--model",os.environ.get("OPENCODE_MODEL","alibaba-cn/glm-5"),
+                              "--agent","build","--dangerously-skip-permissions","--thinking=false", prompt], text=True)
+          if r.returncode != 0:
+              print(f"::error::opencode exited {r.returncode}", file=sys.stderr); sys.exit(r.returncode)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          rm -f .review-verdict.md   # never commit the verdict scratch file
+          while IFS= read -r f; do [ -f "$f" ] && git add -- "$f"; done < target-files.txt
+          if git diff --cached --quiet; then
+            echo "::notice::auto-revise produced no change."
+            exit 0
+          fi
+          git commit -m "docs(test): auto-revise per TSE review [auto-revise]"
+          git push
 
       - name: Comment — infra failure
-        if: failure()
+        if: github.event_name == 'pull_request' && failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh pr comment "$PR_NUM" --repo "$REPO" --body "⚠️ \`测试交付件评审\` 执行异常（非评审结论），详见 [run 日志](${RUN_URL})。修复后推送或 re-run。" || true
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "⚠️ \`测试交付件评审\` 执行异常（非评审结论），详见 [run 日志](${RUN_URL})。" || true
+
+  # ============ B. 人工评论驱动修订（issue_comment） ============
+  comment_revise:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request != null
+      && github.event.comment.user.type != 'Bot'
+      && !endsWith(github.event.comment.user.login, '-bot')
+    runs-on: [self-hosted, ai-dev-runner]
+    steps:
+      - name: Resolve PR + gate (draft + same-repo + has test files)
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          DATA=$(gh api "/repos/${REPO}/pulls/${PR_NUM}")
+          IS_DRAFT=$(echo "$DATA" | jq -r '.draft')
+          HEAD_REF=$(echo "$DATA" | jq -r '.head.ref')
+          HEAD_REPO=$(echo "$DATA" | jq -r '.head.repo.full_name')
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          if [ "$IS_DRAFT" != "true" ] || [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::notice::not a same-repo draft; skip."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh pr view "$PR_NUM" --repo "$REPO" --json files -q '.files[].path' > pr-files.txt
+          grep -E '^issue_docs/[^/]+/Test/(test-design-report\.md|test_design_cases\.py)$' pr-files.txt > target-files.txt || true
+          if [ ! -s target-files.txt ]; then
+            echo "::notice::no test deliverables in PR; skip."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR head branch
+        if: steps.gate.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.gate.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: React 'eyes'
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api -X POST -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" -f content=eyes >/dev/null || true
+
+      - name: Fetch Test-Design-Agent spec
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          SPEC_REPO: agentic-develop-playground/agent-development-specification
+        run: |
+          set -euo pipefail
+          mkdir -p ${RUNNER_TEMP}/agents
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Design-Agent.md" \
+            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/agents/design.md
+          wc -c ${RUNNER_TEMP}/agents/design.md
+
+      - name: Setup opencode
+        if: steps.gate.outputs.go == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if ! command -v opencode >/dev/null 2>&1; then
+            npm install -g opencode-ai || curl -fsSL https://opencode.ai/install | bash
+          fi
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.opencode/bin:$PATH"
+          command -v opencode || { echo "::error::opencode install failed"; exit 1; }
+          mkdir -p "$HOME/.local/share/opencode" "$HOME/.config/opencode"
+          printf '{"alibaba-cn":{"type":"api","key":"%s"}}\n' "$OPENCODE_API_KEY" > "$HOME/.local/share/opencode/auth.json"
+          chmod 600 "$HOME/.local/share/opencode/auth.json"
+          printf '{"$schema":"https://opencode.ai/config.json"}\n' > "$HOME/.config/opencode/opencode.json"
+
+      - name: Revise per comment via Test-Design-Agent + push
+        id: revise
+        if: steps.gate.outputs.go == 'true'
+        env:
+          HOME: /home/runner
+          OPENCODE_MODEL: alibaba-cn/glm-5
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/fb"
+          printf '%s' "$COMMENT_BODY" > "${RUNNER_TEMP}/fb/comment.txt"
+          python3 - <<'PY'
+          import os, pathlib, subprocess, sys
+          RT = os.environ["RUNNER_TEMP"]
+          role = pathlib.Path(f"{RT}/agents/design.md").read_text(encoding="utf-8")
+          targets = [l.strip() for l in pathlib.Path("target-files.txt").read_text().splitlines() if l.strip()]
+          report = next((t for t in targets if t.endswith("test-design-report.md")), None)
+          cases = next((t for t in targets if t.endswith("test_design_cases.py")), None)
+          lines = ["================ 本次任务（修订模式）================","","【反馈来源】人工评论，反馈正文见：" + f"{RT}/fb/comment.txt","","【待修订的既有交付件】（Read 后就地改）"]
+          if report: lines.append(f"- 测试策略说明书：{report}")
+          if cases: lines.append(f"- 测试用例脚本：{cases}")
+          lines += ["","按「修订模式」规则就地修改这两个文件；只改反馈涉及的部分；不要写任何 meta / 过程性内容。"]
+          prompt = role + "\n\n" + "\n".join(lines)
+          print("::group::opencode comment-revise prompt"); print(prompt); print("::endgroup::", flush=True)
+          r = subprocess.run(["opencode","run","--model",os.environ.get("OPENCODE_MODEL","alibaba-cn/glm-5"),
+                              "--agent","build","--dangerously-skip-permissions","--thinking=false", prompt], text=True)
+          if r.returncode != 0:
+              print(f"::error::opencode exited {r.returncode}", file=sys.stderr); sys.exit(r.returncode)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          while IFS= read -r f; do [ -f "$f" ] && git add -- "$f"; done < target-files.txt
+          if git diff --cached --quiet; then
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::comment-revise produced no change."
+            exit 0
+          fi
+          git commit -m "docs(test): revise per comment ${{ github.event.comment.id }} [auto-revise]"
+          git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment — revise done
+        if: steps.gate.outputs.go == 'true' && steps.revise.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.issue.number }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "🚀 已根据评论修订并推送（会自动触发重新评审）。
+
+          - 触发评论：${COMMENT_URL}
+          - run：${RUN_URL}" || true
