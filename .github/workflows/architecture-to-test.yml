@@ -89,6 +89,11 @@ jobs:
             -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-strategy.md
           gh api "/repos/${SPEC_REPO}/contents/spec/teams/templates/Test/%231%20Test%20Specification.md" \
             -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-specification.md
+          # Agent role spec — single source of truth for the test-design agent's
+          # capability (methodology + output rules). The prompt below only adds
+          # the per-task instance (concrete file paths).
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Design-Agent.md" \
+            -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-design-agent.md
           wc -c /tmp/test-templates/*.md
 
       - name: Setup opencode
@@ -136,33 +141,23 @@ jobs:
           set -euo pipefail
           command -v opencode >/dev/null 2>&1 || { echo "::error::opencode missing from PATH after Setup step"; exit 1; }
           python3 - <<'PY'
-          import os, pathlib, re, subprocess, sys
+          import os, pathlib, subprocess, sys
 
           PR_NUM = os.environ["PR_NUM"]
           PR_URL = os.environ["PR_URL"]
           PR_TITLE = os.environ["PR_TITLE"]
 
-          IT_ROOT = pathlib.Path("/tmp/it")
-          GENERAL_SKILL_DIR = IT_ROOT / "test_skills_base" / "test-case-generator"
-
-          MODULE_PATTERN = re.compile(
-              r"^##\s*模块归属\s*$.*?^[\s\-]*\*{0,2}module\*{0,2}\s*:\s*([^\s`\"]+)",
-              re.MULTILINE | re.DOTALL,
-          )
-
-          def extract_module(arch_path):
-              try:
-                  text = pathlib.Path(arch_path).read_text(encoding="utf-8")
-              except OSError:
-                  return None
-              m = MODULE_PATTERN.search(text)
-              return m.group(1).strip() if m else None
+          # Agent capability (role / methodology / output rules) is the single
+          # source of truth — fetched to /tmp/test-templates/test-design-agent.md.
+          # The step only assembles a per-task instance block (concrete paths);
+          # skill resolution (incl. picking the per-module dir from 模块归属) is
+          # delegated to the agent, which reads the arch doc anyway.
+          role = pathlib.Path("/tmp/test-templates/test-design-agent.md").read_text(encoding="utf-8")
 
           arch_files = [
               l for l in pathlib.Path("arch-files.txt").read_text().splitlines() if l.strip()
           ]
-          generated = pathlib.Path("generated-files.txt")
-          generated.write_text("")
+          pathlib.Path("generated-files.txt").write_text("")
 
           for arch_path in arch_files:
               issue_id = arch_path.split("/")[1]
@@ -171,62 +166,24 @@ jobs:
               report = test_dir / "test-design-report.md"
               cases = test_dir / "test_design_cases.py"
 
-              # Resolve skills: general (always) + module-specific (best-effort).
-              module = extract_module(arch_path)
-              skill_lines = []
-              if GENERAL_SKILL_DIR.is_dir():
-                  skill_lines.append(f"- 通用测试用例生成技能（必读）：{GENERAL_SKILL_DIR}/  — 读 SKILL.md 与 references/ 内的指导，按其方法生成用例")
-              else:
-                  print(f"::warning file={arch_path}::general skill dir {GENERAL_SKILL_DIR} missing; proceeding without it")
-
-              if module:
-                  mod_skill_dir = IT_ROOT / "services" / module / "test-case-generator"
-                  if mod_skill_dir.is_dir():
-                      skill_lines.append(f"- 模块特性测试技能（必读）：{mod_skill_dir}/  — 读 SKILL.md 与 references/ 内容，覆盖 {module} 模块的特定用例约定")
-                  else:
-                      print(f"::notice file={arch_path}::no per-module skill at {mod_skill_dir}; using general skill only")
-              else:
-                  print(f"::warning file={arch_path}::cannot extract '## 模块归属' module; using general skill only")
-
-              prompt_lines = [
-                  "你是测试设计 agent。本次任务必须一次性跑完，全流程无需任何人工确认。",
+              prompt = role + "\n\n" + "\n".join([
+                  "================ 本次任务 ================",
                   "",
-                  "【输入文档】（请使用 Read 工具读取，再开始产出）",
+                  "【输入文档】（用 Read 读取）",
                   f"1. 架构设计文档：{arch_path}",
                   "2. 测试策略模板：/tmp/test-templates/test-strategy.md",
                   "3. 测试用例规约模板：/tmp/test-templates/test-specification.md",
                   "",
-              ]
-              if skill_lines:
-                  prompt_lines += [
-                      "【测试用例生成 skills】（必须 Read 这些 SKILL.md / references 内的指导文件，并按其约定来产出用例）",
-                  ] + skill_lines + [""]
-              prompt_lines += [
-                  "【输出文件】（必须使用 Write 工具完整写出，不要省略、不要缩写）",
+                  "【测试用例生成 skills】（必读；目录不存在则跳过该项）",
+                  "- 通用：/tmp/it/test_skills_base/test-case-generator/（SKILL.md + references/）",
+                  "- 模块特性：从架构文档 `## 模块归属` 取 module 名，读 /tmp/it/services/<module>/test-case-generator/",
                   "",
-                  f"文件 1：{report}",
-                  "- 以「测试策略模板」结构为骨架",
-                  f"- H1 改为 `# #{issue_id} <需求名称> 测试策略设计说明书`，需求名称取自架构文档",
-                  f"- 在 H1 之后插入引用块，记录来源架构文档路径 `{arch_path}` 与触发 PR `[#{PR_NUM}]({PR_URL}) — {PR_TITLE}`",
-                  "- **必须**将架构文档中的 `## 模块归属` 章节（含 `module: <name>` 行）原样复制到本文件，放在引用块之后、第 1 节之前；如果架构文档没有该章节，则新建一行 `## 模块归属` + `module: <TODO>`（用 TODO 占位，便于下游集成 workflow 识别）",
-                  "- 第 1 节「基本信息」按架构文档实际信息填写",
-                  "- 第 2 节「测试维度确认」依据架构内容判断需要勾选哪些维度，给出勾选理由",
-                  "- 第 3 节按勾选的维度填写专项验证设计，未勾选的小节直接删除",
-                  "- 与架构文档「功能设计分解 TASK 清单」逐条对齐，确保每个 TASK 在测试策略中有对应入口",
+                  "【输出文件】（用 Write 完整写出）",
+                  f"- 文件 1（测试策略设计说明书，markdown）：{report}",
+                  f"- 文件 2（测试用例，Python pytest 脚本）：{cases}",
                   "",
-                  f"文件 2：{cases}  ← **必须是可直接 pytest 执行的 Python 脚本（.py），不是 markdown**",
-                  "- **格式覆盖**：忽略 skill 中关于 markdown 表格 / agent-exec 块的 output 约定；本次只采纳 skill 的方法论（9 维度覆盖、等价类、边界值、用例命名、可追溯性）。output 形式固定为 Python pytest。",
-                  "- 文件头注释：`# #{issue_id} <需求名称> 测试用例（Python pytest 脚本，由 architecture-to-test workflow 生成）`，下面 1-2 行注释写来源 PR 与架构文档路径。",
-                  "- 必要 import：`import pytest`，按需 `import requests`、`from unittest import mock` 等。",
-                  "- 每个用例一个 `def test_<模块>_<能力>_<序号>(...):` 函数；函数 docstring 写 `[维度标识] 一句话描述`，对应优先级用 `@pytest.mark.p0/p1/p2` 装饰器。",
-                  "- 至少覆盖架构文档中每条 SR/AR 与每个 TASK；可使用 `@pytest.mark.parametrize` 合并相邻等价类。",
-                  "- 操作步骤用真实可执行代码（curl 改 requests / subprocess、UI 改 Playwright 占位）；预期结果用 assert 断言。",
-                  "- 顶部留一个 `pytest.ini` / conftest 风格的 fixtures 区（必要时为空）。",
-                  "- 文件末尾追加一段 `# ===== 用例索引（人类导入禅道/Tapd 可贴）=====` 注释块，把所有 test 函数列成 markdown 表格（用例 ID / 标题 / 关联 task / 优先级），便于人类一眼看完覆盖范围。",
-                  "",
-                  "完成两个文件的写入后停止；不要询问、不要修改其他文件。",
-              ]
-              prompt = "\n".join(prompt_lines)
+                  f"issueId={issue_id}；来源 PR=[#{PR_NUM}]({PR_URL}) — {PR_TITLE}",
+              ])
 
               print(f"::group::opencode prompt for #{issue_id}")
               print(prompt)
