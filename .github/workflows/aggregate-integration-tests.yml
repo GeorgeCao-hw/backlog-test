@@ -65,6 +65,11 @@ jobs:
                 print; exit
               }' "$f")
             mod=$(echo "$mod" | tr -d '`' | tr -d '"' | awk '{print $1}')
+            # Skip placeholder values like <TODO>/<TBD>
+            if echo "$mod" | grep -qE '^<.*>$'; then
+              echo "::warning file=$f::模块名是占位符 '${mod}'（issue #${issue_id} 的架构设计未填写模块归属）— 跳过"
+              continue
+            fi
             if [ -z "$mod" ]; then
               echo "::warning file=$f::missing '## 模块归属' section or 'module: <name>' line — skipping"
               continue
@@ -103,12 +108,15 @@ jobs:
           SPEC_REPO: agentic-develop-playground/agent-development-specification
         run: |
           set -euo pipefail
-          mkdir -p /tmp/test-templates
+          mkdir -p ${RUNNER_TEMP}/test-templates
           gh api "/repos/${SPEC_REPO}/contents/spec/teams/templates/Test/%231%20Test%20Strategy.md" \
-            -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-strategy.md
+            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/test-templates/test-strategy.md
           gh api "/repos/${SPEC_REPO}/contents/spec/teams/templates/Test/%231%20Test%20Specification.md" \
-            -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-specification.md
-          wc -c /tmp/test-templates/*.md
+            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/test-templates/test-specification.md
+          # Agent role spec — single source of truth for the integration (merge) agent.
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Integration-Test-Agent.md" \
+            -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/test-templates/integration-test-agent.md
+          wc -c ${RUNNER_TEMP}/test-templates/*.md
 
       - name: Setup opencode
         if: steps.modules.outputs.found == 'true'
@@ -135,9 +143,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -euo pipefail
-          rm -rf /tmp/it
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/agentic-develop-playground/integration-tests.git" /tmp/it
-          ls /tmp/it/services/ || true
+          rm -rf ${RUNNER_TEMP}/it
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/agentic-develop-playground/integration-tests.git" ${RUNNER_TEMP}/it
+          ls ${RUNNER_TEMP}/it/services/ || true
 
       - name: Merge per-issue deliverables into module files via opencode
         if: steps.modules.outputs.found == 'true'
@@ -156,8 +164,14 @@ jobs:
           PR_NUM = os.environ["PR_NUM"]
           PR_URL = os.environ["PR_URL"]
           PR_TITLE = os.environ["PR_TITLE"]
-          IT_ROOT = pathlib.Path("/tmp/it")
-          GENERAL_SKILL_DIR = IT_ROOT / "test_skills_base" / "test-case-generator"
+          RT = os.environ["RUNNER_TEMP"]
+          IT_ROOT = pathlib.Path(RT) / "it"
+
+          # Agent capability (role / methodology / merge + output rules) is the
+          # single source of truth — fetched to integration-test-agent.md. The
+          # step only assembles a per-task instance block (concrete paths);
+          # skill resolution is delegated to the agent.
+          role = pathlib.Path(f"{RT}/test-templates/integration-test-agent.md").read_text(encoding="utf-8")
 
           mod_to_issues = {}
           for line in pathlib.Path("issue-module-map.txt").read_text().splitlines():
@@ -175,67 +189,40 @@ jobs:
               mod_dir.mkdir(parents=True, exist_ok=True)
               strategy_path = mod_dir / "TestStrategy.md"
               cases_path = mod_dir / "test_cases.py"
-              strategy_exists = strategy_path.exists() and strategy_path.stat().st_size > 0
-              cases_exists = cases_path.exists() and cases_path.stat().st_size > 0
 
-              skill_lines = []
-              if GENERAL_SKILL_DIR.is_dir():
-                  skill_lines.append(f"- 通用测试用例生成技能（必读）：{GENERAL_SKILL_DIR}/  — 读 SKILL.md 与 references/ 内的指导，按其方法合并 / 产出用例")
-              else:
-                  print(f"::warning::general skill dir {GENERAL_SKILL_DIR} missing; proceeding without it")
+              per_issue = []
+              for issue_id in issues:
+                  per_issue += [
+                      f"- issue #{issue_id} 测试策略：issue_docs/{issue_id}/Test/test-design-report.md",
+                      f"- issue #{issue_id} 测试用例：issue_docs/{issue_id}/Test/test_design_cases.py",
+                  ]
 
-              mod_skill_dir = IT_ROOT / "services" / mod / "test-case-generator"
-              if mod_skill_dir.is_dir():
-                  skill_lines.append(f"- 模块特性测试技能（必读）：{mod_skill_dir}/  — 读 SKILL.md 与 references/ 内容，覆盖 {mod} 模块的特定用例约定")
-              else:
-                  print(f"::notice::no per-module skill at {mod_skill_dir}; using general skill only")
-
-              prompt_lines = [
-                  "你是测试集成 agent。本次任务必须一次性跑完，全流程无需任何人工确认。",
+              prompt = role + "\n\n" + "\n".join([
+                  "================ 本次任务 ================",
                   "",
                   f"【目标模块】services/{mod}/",
                   "",
-                  "【模块已有交付件】（请使用 Read 读取后再决定融合方式）",
-                  f"- 模块测试策略：{strategy_path}  ({'已存在，融合' if strategy_exists else '不存在，使用模板新建'})",
-                  f"- 模块全量用例：{cases_path}    ({'已存在，融合' if cases_exists else '不存在，使用模板新建'})",
+                  "【模块已有交付件】（Read 后决定融合方式；不存在则用模板新建）",
+                  f"- 模块测试策略：{strategy_path}",
+                  f"- 模块全量用例：{cases_path}",
                   "",
-                  "【上游模板（已不存在时用作骨架）】",
-                  "- 测试策略模板：/tmp/test-templates/test-strategy.md",
-                  "- 测试用例规约模板：/tmp/test-templates/test-specification.md",
+                  "【上游模板（模块文件不存在时用作骨架）】",
+                  f"- 测试策略模板：{RT}/test-templates/test-strategy.md",
+                  f"- 测试用例规约模板：{RT}/test-templates/test-specification.md",
                   "",
-              ]
-              if skill_lines:
-                  prompt_lines += [
-                      "【测试用例生成 skills】（必须 Read 这些 SKILL.md / references 内的指导文件，并按其约定来合并 / 产出用例）",
-                  ] + skill_lines + [""]
-              prompt_lines += [
+                  "【测试用例生成 skills】（必读；目录不存在则跳过该项）",
+                  f"- 通用：{IT_ROOT}/test_skills_base/test-case-generator/",
+                  f"- 模块特性：{IT_ROOT}/services/{mod}/test-case-generator/",
+                  "",
                   f"【本次合入的单需求交付件】（涉及 issue：{', '.join(issues)}）",
-              ]
-              for issue_id in issues:
-                  prompt_lines += [
-                      f"- 需求测试策略：issue_docs/{issue_id}/Test/test-design-report.md",
-                      f"- 需求测试用例（Python pytest 脚本）：issue_docs/{issue_id}/Test/test_design_cases.py",
-                  ]
-              prompt_lines += [
+                  *per_issue,
                   "",
-                  "【输出文件】（必须使用 Write 工具完整写出）",
+                  "【输出文件】（用 Write 完整写出）",
+                  f"- 文件 1（模块测试策略，markdown）：{strategy_path}",
+                  f"- 文件 2（模块全量用例，pytest）：{cases_path}",
                   "",
-                  f"1. {strategy_path}",
-                  "   - 沿用模块测试策略已有的整体结构（章节布局）；模块文件不存在时用 /tmp/test-templates/test-strategy.md 作骨架。",
-                  "   - 把每个单需求测试策略的要点融入对应章节；既有内容不要删除，新条目以追加方式呈现。",
-                  f"   - 文件顶部维护一段「更新记录」表格：每次新增一行，列出 PR 号、issue 列表、合入时间。本次：PR [#{PR_NUM}]({PR_URL})，issues={', '.join(issues)}。",
-                  "",
-                  f"2. {cases_path}  ← **必须是可直接 pytest 执行的 Python 脚本（.py），不是 markdown**",
-                  "   - **格式覆盖**：忽略 skill 中关于 markdown 表格 / agent-exec 块的 output 约定；本次只采纳 skill 的方法论。output 形式固定为 Python pytest。",
-                  "   - 沿用模块已有 Python 用例的整体结构（imports、fixtures、辅助函数）；模块文件不存在时按 pytest 惯例新建一个最小骨架（含 `import pytest` 和一个空的 fixtures 区）。",
-                  "   - 把单需求的每条用例追加为新的 `def test_<模块>_<能力>_<序号>(...):` 函数；既有用例（已有的 def test_*）一律保留不动。",
-                  "   - 优先级用 `@pytest.mark.p0/p1/p2` 装饰器；docstring 一行带 `[维度标识]` + 简述。",
-                  f"   - 函数名冲突时，给新加入条目加后缀 `_pr_{PR_NUM}` 避免覆盖。",
-                  "   - 文件末尾维护一段 `# ===== 用例索引（人类可贴禅道/Tapd） =====` 注释块，更新或追加 markdown 表格行（用例 ID = 函数名 / 标题 / 关联 task / 优先级 / 来源 PR）。",
-                  "",
-                  "只产出这两个文件，不要修改其他文件，不要询问、不要回复多余信息。",
-              ]
-              prompt = "\n".join(prompt_lines)
+                  f"来源 PR=[#{PR_NUM}]({PR_URL}) — {PR_TITLE}；函数名冲突时新增条目加后缀 _pr_{PR_NUM}",
+              ])
 
               print(f"::group::opencode prompt for module={mod}")
               print(prompt)
@@ -279,7 +266,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -euo pipefail
-          cd /tmp/it
+          cd ${RUNNER_TEMP}/it
           BRANCH="bot/aggregate-from-backlog-pr-${PR_NUM}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -298,7 +285,7 @@ jobs:
           # --force: bot branch is wholly workflow-owned; re-runs must overwrite stale tips.
           git push -u --force origin "$BRANCH"
 
-          cat > /tmp/pr-body.md <<EOF
+          cat > ${RUNNER_TEMP}/pr-body.md <<EOF
           Auto-generated draft from merged backlog PR [#${PR_NUM}](${PR_URL}) — ${PR_TITLE}.
 
           Modules updated: \`${MODS}\`
@@ -311,7 +298,7 @@ jobs:
             --base main \
             --head "$BRANCH" \
             --title "docs(test): integrate from backlog #${PR_NUM} (${MODS})" \
-            --body-file /tmp/pr-body.md \
+            --body-file ${RUNNER_TEMP}/pr-body.md \
             --repo agentic-develop-playground/integration-tests)
           echo "draft_pr_url=$DRAFT_URL" >> "$GITHUB_OUTPUT"
           echo "modules=$MODS" >> "$GITHUB_OUTPUT"
