@@ -157,7 +157,8 @@ jobs:
           arch_files = [
               l for l in pathlib.Path("arch-files.txt").read_text().splitlines() if l.strip()
           ]
-          pathlib.Path("generated-files.txt").write_text("")
+          generated = pathlib.Path("generated-files.txt")
+          generated.write_text("")
 
           for arch_path in arch_files:
               issue_id = arch_path.split("/")[1]
