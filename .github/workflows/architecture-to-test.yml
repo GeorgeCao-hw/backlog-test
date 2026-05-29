@@ -92,7 +92,7 @@ jobs:
           # Agent role spec — single source of truth for the test-design agent's
           # capability (methodology + output rules). The prompt below only adds
           # the per-task instance (concrete file paths).
-          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Design-Agent.md" \
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/test-design/AGENT.md" \
             -H "Accept: application/vnd.github.raw" > /tmp/test-templates/test-design-agent.md
           wc -c /tmp/test-templates/*.md
 
