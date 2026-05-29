@@ -114,7 +114,7 @@ jobs:
           gh api "/repos/${SPEC_REPO}/contents/spec/teams/templates/Test/%231%20Test%20Specification.md" \
             -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/test-templates/test-specification.md
           # Agent role spec — single source of truth for the integration (merge) agent.
-          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Integration-Test-Agent.md" \
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/integration-test/AGENT.md" \
             -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/test-templates/integration-test-agent.md
           wc -c ${RUNNER_TEMP}/test-templates/*.md
 

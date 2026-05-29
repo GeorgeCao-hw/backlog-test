@@ -82,9 +82,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ${RUNNER_TEMP}/agents
-          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Review-Agent.md" \
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/test-review/AGENT.md" \
             -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/agents/review.md
-          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Design-Agent.md" \
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/test-design/AGENT.md" \
             -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/agents/design.md
           wc -c ${RUNNER_TEMP}/agents/*.md
 
@@ -297,7 +297,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ${RUNNER_TEMP}/agents
-          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/tester/Test-Design-Agent.md" \
+          gh api "/repos/${SPEC_REPO}/contents/spec/teams/agents/test-design/AGENT.md" \
             -H "Accept: application/vnd.github.raw" > ${RUNNER_TEMP}/agents/design.md
           wc -c ${RUNNER_TEMP}/agents/design.md
 
